@@ -5,22 +5,17 @@ from __future__ import division, absolute_import
 import torch.utils.model_zoo as model_zoo
 from torch import nn
 
-__all__ = [
-    'resnet18', 'resnet34', 'resnet50', 'resnet50_fc512'
-]
+__all__ = ["resnet18", "resnet34", "resnet50", "resnet50_fc512"]
 
 model_urls = {
-    'resnet18':
-    'https://download.pytorch.org/models/resnet18-5c106cde.pth',
-    'resnet34':
-    'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
-    'resnet50':
-    'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+    "resnet18": "https://download.pytorch.org/models/resnet18-5c106cde.pth",
+    "resnet34": "https://download.pytorch.org/models/resnet34-333f7ec4.pth",
+    "resnet50": "https://download.pytorch.org/models/resnet50-19c8e357.pth",
 }
 
 
 def build_model(
-    name, num_classes, loss='softmax', pretrained=True, use_gpu=True
+    name, num_classes, loss="softmax", pretrained=True, use_gpu=True
 ):
     """A function wrapper for building a model.
     Args:
@@ -34,22 +29,25 @@ def build_model(
     Returns:
         nn.Module
     """
-    if name == 'resnet50':
+    if name == "resnet50":
         model_fn = resnet50
-    elif name == 'resnet18':
+    elif name == "resnet18":
         model_fn = resnet18
-    elif name == 'resnet34':
+    elif name == "resnet34":
         model_fn = resnet34
-    elif name == 'resnet50_fc':
+    elif name == "resnet50_fc":
         model_fn = resnet50_fc512
     else:
-        raise ValueError('The given model name is not support. Supported models are resnet18, resnet34, resnet50, resnet50_fc')
+        raise ValueError(
+            "The given model name is not support. Supported models are resnet18, resnet34, resnet50, resnet50_fc"
+        )
     return model_fn(
         num_classes=num_classes,
         loss=loss,
         pretrained=pretrained,
-        use_gpu=use_gpu
+        use_gpu=use_gpu,
     )
+
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding"""
@@ -61,7 +59,7 @@ def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
         padding=dilation,
         groups=groups,
         bias=False,
-        dilation=dilation
+        dilation=dilation,
     )
 
 
@@ -84,14 +82,14 @@ class BasicBlock(nn.Module):
         groups=1,
         base_width=64,
         dilation=1,
-        norm_layer=None
+        norm_layer=None,
     ):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         if groups != 1 or base_width != 64:
             raise ValueError(
-                'BasicBlock only supports groups=1 and base_width=64'
+                "BasicBlock only supports groups=1 and base_width=64"
             )
         if dilation > 1:
             raise NotImplementedError(
@@ -137,12 +135,12 @@ class Bottleneck(nn.Module):
         groups=1,
         base_width=64,
         dilation=1,
-        norm_layer=None
+        norm_layer=None,
     ):
         super(Bottleneck, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
-        width = int(planes * (base_width/64.)) * groups
+        width = int(planes * (base_width / 64.0)) * groups
         # Both self.conv2 and self.downsample layers downsample the input when stride != 1
         self.conv1 = conv1x1(inplanes, width)
         self.bn1 = norm_layer(width)
@@ -221,8 +219,9 @@ class ResNet(nn.Module):
         if len(replace_stride_with_dilation) != 3:
             raise ValueError(
                 "replace_stride_with_dilation should be None "
-                "or a 3-element tuple, got {}".
-                format(replace_stride_with_dilation)
+                "or a 3-element tuple, got {}".format(
+                    replace_stride_with_dilation
+                )
             )
         self.groups = groups
         self.base_width = width_per_group
@@ -238,21 +237,21 @@ class ResNet(nn.Module):
             128,
             layers[1],
             stride=2,
-            dilate=replace_stride_with_dilation[0]
+            dilate=replace_stride_with_dilation[0],
         )
         self.layer3 = self._make_layer(
             block,
             256,
             layers[2],
             stride=2,
-            dilate=replace_stride_with_dilation[1]
+            dilate=replace_stride_with_dilation[1],
         )
         self.layer4 = self._make_layer(
             block,
             512,
             layers[3],
             stride=last_stride,
-            dilate=replace_stride_with_dilation[2]
+            dilate=replace_stride_with_dilation[2],
         )
         self.global_avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = self._construct_fc_layer(
@@ -288,8 +287,14 @@ class ResNet(nn.Module):
         layers = []
         layers.append(
             block(
-                self.inplanes, planes, stride, downsample, self.groups,
-                self.base_width, previous_dilation, norm_layer
+                self.inplanes,
+                planes,
+                stride,
+                downsample,
+                self.groups,
+                self.base_width,
+                previous_dilation,
+                norm_layer,
             )
         )
         self.inplanes = planes * block.expansion
@@ -301,7 +306,7 @@ class ResNet(nn.Module):
                     groups=self.groups,
                     base_width=self.base_width,
                     dilation=self.dilation,
-                    norm_layer=norm_layer
+                    norm_layer=norm_layer,
                 )
             )
 
@@ -320,7 +325,7 @@ class ResNet(nn.Module):
 
         assert isinstance(
             fc_dims, (list, tuple)
-        ), 'fc_dims must be either list or tuple, but got {}'.format(
+        ), "fc_dims must be either list or tuple, but got {}".format(
             type(fc_dims)
         )
 
@@ -341,7 +346,7 @@ class ResNet(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(
-                    m.weight, mode='fan_out', nonlinearity='relu'
+                    m.weight, mode="fan_out", nonlinearity="relu"
                 )
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
@@ -380,9 +385,9 @@ class ResNet(nn.Module):
 
         y = self.classifier(v)
 
-        if self.loss == 'softmax':
+        if self.loss == "softmax":
             return y
-        elif self.loss == 'triplet':
+        elif self.loss == "triplet":
             return y, v
         else:
             raise KeyError("Unsupported loss: {}".format(self.loss))
@@ -407,7 +412,7 @@ def init_pretrained_weights(model, model_url):
 """ResNet"""
 
 
-def resnet18(num_classes, loss='softmax', pretrained=True, **kwargs):
+def resnet18(num_classes, loss="softmax", pretrained=True, **kwargs):
     model = ResNet(
         num_classes=num_classes,
         loss=loss,
@@ -419,11 +424,11 @@ def resnet18(num_classes, loss='softmax', pretrained=True, **kwargs):
         **kwargs
     )
     if pretrained:
-        init_pretrained_weights(model, model_urls['resnet18'])
+        init_pretrained_weights(model, model_urls["resnet18"])
     return model
 
 
-def resnet34(num_classes, loss='softmax', pretrained=True, **kwargs):
+def resnet34(num_classes, loss="softmax", pretrained=True, **kwargs):
     model = ResNet(
         num_classes=num_classes,
         loss=loss,
@@ -435,11 +440,11 @@ def resnet34(num_classes, loss='softmax', pretrained=True, **kwargs):
         **kwargs
     )
     if pretrained:
-        init_pretrained_weights(model, model_urls['resnet34'])
+        init_pretrained_weights(model, model_urls["resnet34"])
     return model
 
 
-def resnet50(num_classes, loss='softmax', pretrained=True, **kwargs):
+def resnet50(num_classes, loss="softmax", pretrained=True, **kwargs):
     model = ResNet(
         num_classes=num_classes,
         loss=loss,
@@ -451,14 +456,16 @@ def resnet50(num_classes, loss='softmax', pretrained=True, **kwargs):
         **kwargs
     )
     if pretrained:
-        init_pretrained_weights(model, model_urls['resnet50'])
+        init_pretrained_weights(model, model_urls["resnet50"])
     return model
 
 
 """
 ResNet + FC
 """
-def resnet50_fc512(num_classes, loss='softmax', pretrained=True, **kwargs):
+
+
+def resnet50_fc512(num_classes, loss="softmax", pretrained=True, **kwargs):
     model = ResNet(
         num_classes=num_classes,
         loss=loss,
@@ -470,5 +477,5 @@ def resnet50_fc512(num_classes, loss='softmax', pretrained=True, **kwargs):
         **kwargs
     )
     if pretrained:
-        init_pretrained_weights(model, model_urls['resnet50'])
+        init_pretrained_weights(model, model_urls["resnet50"])
     return model
