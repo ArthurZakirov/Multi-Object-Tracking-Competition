@@ -175,7 +175,6 @@ class MyTracker(ReIDTracker):
         obj_detect,
         distance_threshold,
         unmatched_cost,
-        detector_score_threshold,
         patience,
     ):
 
@@ -184,7 +183,6 @@ class MyTracker(ReIDTracker):
         self.reid_model = reid_model
         self.assign_model = assign_model
 
-        self.detector_score_threshold = detector_score_threshold
         self.distance_threshold = distance_threshold
         self.unmatched_cost = unmatched_cost
         self.patience = patience
@@ -245,7 +243,6 @@ class MyTracker(ReIDTracker):
     def step(self, frame):
         """This function should be called every timestep to perform tracking with a blob containing the image information.
 		"""
-
         # take detection from databasis if availablet
         if "boxes" in frame.keys():
             detection = frame
@@ -474,5 +471,3 @@ def hungarian_matching(distance_matrix, unmatched_cost):
         unmatched_box_idx,
     )
 
-
-############

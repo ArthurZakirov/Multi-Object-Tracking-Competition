@@ -318,11 +318,11 @@ def run_tracker(sequences, tracker):
             for frame in tqdm(sequence, desc="frame", leave=False):
                 tracker.step(frame)
 
-        results = tracker.get_results()
-        results_seq[str(sequence)] = results
+        results_dict = tracker.get_results()
+        results_seq[str(sequence)] = results_dict
 
         if not sequence.no_gt:
-            mot_accums.append(get_mot_accum(results, sequence))
+            mot_accums.append(get_mot_accum(results_dict, sequence))
 
     if mot_accums:
         print("\nevaluate_mot_accums...")
@@ -389,7 +389,7 @@ def write_results(tracker_results_dict, output_path):
         Each file contains these lines:
         <frame>, <id>, <bb_left>, <bb_top>, <bb_width>, <bb_height>, <conf>, <x>, <y>, <z>
         """
-    with open(output_path, "w") as of:
+    with open(output_path, "w", newline="") as of:
         writer = csv.writer(of, delimiter=",")
         for i, track in tracker_results_dict.items():
             for frame, bb in track.items():
@@ -397,6 +397,7 @@ def write_results(tracker_results_dict, output_path):
                 y1 = bb[1]
                 x2 = bb[2]
                 y2 = bb[3]
+                score = int(np.round(bb[4].item()))
                 writer.writerow(
                     [
                         frame + 1,
@@ -405,7 +406,7 @@ def write_results(tracker_results_dict, output_path):
                         y1 + 1,
                         x2 - x1 + 1,
                         y2 - y1 + 1,
-                        -1,
+                        score,
                         -1,
                         -1,
                         -1,

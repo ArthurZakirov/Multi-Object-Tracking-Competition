@@ -78,11 +78,11 @@ def obj_detect_transforms(train):
     return Compose(transforms)
 
 
-def evaluate_obj_detect(model, data_loader, debug=False):
+def run_obj_detect(model, data_loader, debug=False):
     model.eval()
     device = list(model.parameters())[0].device
     results_dict = {}
-    for images, targets in tqdm(data_loader, desc="batches"):
+    for images, targets in tqdm(data_loader, desc="eval_batches", leave=False):
         images = [img.to(device) for img in images]
 
         with torch.no_grad():

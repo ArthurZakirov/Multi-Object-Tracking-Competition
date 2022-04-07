@@ -28,14 +28,14 @@ parser.add_argument(
 parser.add_argument(
     "--precomputed_data_root_dir",
     type=str,
-    default="data/precomputed_detection/maskrcnn",
+    default="data/precomputed_detection/default",
     help="path to precomputed evaluation data root",
 )
 parser.add_argument("--use_precomputed", action="store_true")
 parser.add_argument(
     "--split",
     type=str,
-    default="train",
+    default="val",
     help="part of dataset, choose from ['train', 'test', 'all', '01', '02', '03', '04', '05', '06', '07', '08', '09','10', '11', '12', '13', '14', 'reid', 'train_wo_val', 'train_wo_val2', 'val', 'val2']",
 )
 parser.add_argument(
@@ -48,10 +48,9 @@ parser.add_argument(
 parser.add_argument(
     "--tracker_config_path",
     type=str,
-    default="config/tracker/tracker.json",
+    default="config/tracker/tracker_box_iou.json",
     help="path to tracker configuration",
 )
-
 
 parser.add_argument(
     "--vis_threshold",
@@ -72,8 +71,18 @@ args = parser.parse_args()
 def main():
     time = datetime.now().strftime("%d-%m-%Y_%H-%M")
     dataset = f"MOT16-{args.split}"
+
     with open(args.tracker_config_path, "r") as f:
         tracker_hyperparams = json.load(f)
+
+    if args.save_eval_config:
+        print("\nsave_eval_config...")
+        output_eval_config_path = os.path.join(
+            args.output_dir, time, "eval_config.json"
+        )
+        ensure_dir(output_eval_config_path)
+        with open(output_eval_config_path, "w") as f:
+            json.dump(vars(args), f)
 
     # execute
     tracker = MyTracker.from_config(tracker_hyperparams)
@@ -84,6 +93,8 @@ def main():
             original_data_root_dir=args.original_data_root_dir,
             split=args.split,
             vis_threshold=args.vis_threshold,
+            return_det_segmentation=tracker.assign_model.use_segmentation,
+            return_gt_segmentation=tracker.assign_model.use_segmentation,
         )
 
     else:
@@ -102,14 +113,8 @@ def main():
             args.output_dir, time, "eval_config.json"
         )
         ensure_dir(output_eval_config_path)
-        eval_config = {
-            "split": args.split,
-            "tracker_config_path": args.tracker_config_path,
-            "precomputed_detection_path": args.precomputed_detection_path,
-            "vis_threshold": args.vis_threshold,
-        }
         with open(output_eval_config_path, "w") as f:
-            json.dump(eval_config)
+            json.dump(vars(args), f)
 
     if args.save_evaluation:
         print("\nsave_evaluation...")
@@ -123,7 +128,7 @@ def main():
     if args.save_tracker_predictions:
         print("\nsave_tracker_predictions...")
         output_predictions_dir = os.path.join(
-            args.output_dir, time, "tracker_predictions_{dataset}"
+            args.output_dir, time, f"tracker_predictions_{dataset}"
         )
         for sequence_name, tracker_results_dict in results_seq.items():
             output_path = os.path.join(

@@ -15,6 +15,8 @@ import torchvision.transforms.functional as TF
 import pandas as pd
 
 from src.detector.utils import decode_segmentation, mask_convert
+from src.tracker.data_track import split_sequence_names
+from src.utils.file_utils import listdir_nohidden
 
 
 def listdir_nohidden(path):
@@ -42,12 +44,15 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
     def __init__(
         self,
         root,
+        split,
+        sparse_version=False,
         transforms=None,
         vis_threshold=0.25,
         segmentation=False,
         only_obj_w_mask=True,
     ):
         self.root = root
+        self.split = split
         self.transforms = transforms
         self._segmentation = segmentation
         self._vis_threshold = vis_threshold
@@ -56,8 +61,21 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
         self._img_paths = []
         self._seg_paths = []
 
-        for seq_name in listdir_nohidden(root):
-            path = os.path.join(root, seq_name)
+        self._train_folders = listdir_nohidden(os.path.join(root, "train"))
+        self._test_folders = listdir_nohidden(os.path.join(root, "test"))
+
+        seq_names = split_sequence_names(split, root)
+        sparse_frequency = 20
+        img_index = 0
+        self._convert_frame_to_img_idx = {
+            seq_name: {} for seq_name in seq_names
+        }
+        for seq_name in seq_names:
+            if seq_name in self._train_folders:
+                path = os.path.join(root, "train", seq_name)
+            else:
+                path = os.path.join(root, "test", seq_name)
+
             config_file = os.path.join(path, "seqinfo.ini")
 
             assert os.path.exists(
@@ -74,17 +92,35 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
             self._seg_dir = os.path.join(path, "seg_ins")
 
             if os.path.exists(self._seg_dir):
-                for seg_file in listdir_nohidden(self._seg_dir):
-                    seg_path = os.path.join(self._seg_dir, seg_file)
-                    self._seg_paths.append(seg_path)
+                for frame_id, seg_file in enumerate(
+                    os.listdir(self._seg_dir), start=1
+                ):
+                    # for i in range(1, seq_len + 1):
+                    if not sparse_version or (
+                        sparse_version and frame_id % sparse_frequency == 0
+                    ):
+                        # seg_path = os.path.join(self._seg_dir, f"{i:06d}.png")
+                        seg_path = os.path.join(self._seg_dir, seg_file)
+                        self._seg_paths.append(seg_path)
 
-            for i in range(1, seq_len + 1):
-                img_path = os.path.join(self._imDir, f"{i:06d}{im_ext}")
-                assert os.path.exists(
-                    img_path
-                ), "Path does not exist: {img_path}"
-                # self._img_paths.append((img_path, im_width, im_height))
-                self._img_paths.append(img_path)
+            for frame_id, img_file in enumerate(
+                os.listdir(self._imDir), start=1
+            ):
+                # for i in range(1, seq_len + 1):
+                if not sparse_version or (
+                    sparse_version and frame_id % sparse_frequency == 0
+                ):
+                    # img_path = os.path.join(self._imDir, f"{i:06d}{im_ext}")
+                    img_path = os.path.join(self._imDir, img_file)
+                    assert os.path.exists(
+                        img_path
+                    ), "Path does not exist: {img_path}"
+                    # self._img_paths.append((img_path, im_width, im_height))
+                    self._img_paths.append(img_path)
+                    self._convert_frame_to_img_idx[seq_name][
+                        frame_id
+                    ] = img_index
+                    img_index += 1
 
     @property
     def num_classes(self):
@@ -93,21 +129,6 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
     def _get_annotation(self, idx):
         """
         """
-
-        if "test" in self.root:
-
-            num_objs = 0
-            boxes = torch.zeros((num_objs, 4), dtype=torch.float32)
-
-            return {
-                "boxes": boxes,
-                "labels": torch.ones((num_objs,), dtype=torch.int64),
-                "image_id": torch.tensor([idx]),
-                "area": (boxes[:, 3] - boxes[:, 1])
-                * (boxes[:, 2] - boxes[:, 0]),
-                "iscrowd": torch.zeros((num_objs,), dtype=torch.int64),
-            }
-
         img_path = self._img_paths[idx]
         file_index = int(os.path.basename(img_path).split(".")[0])
 
@@ -120,7 +141,10 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
         )
 
         bounding_boxes = []
-
+        # if time, try to simplify with this function
+        #####################################
+        # gt = load_detection_from_txt(gt_file, vis_threshold=self._vis_threshold, mode="gt")
+        # bounding_boxes = gt["boxes"][file_index]
         with open(gt_file, "r") as inf:
             reader = csv.reader(inf, delimiter=",")
             for row in reader:
@@ -207,6 +231,7 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         # load images ad masks
         img_path = self._img_paths[idx]
+
         # mask_path = os.path.join(self.root, "PedMasks", self.masks[idx])
         img = Image.open(img_path).convert("RGB")
 
@@ -302,14 +327,7 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
             fp = [[] for _ in range(len(self._img_paths))]
             npos = 0
             for frame_id, frame_result in enumerate(seq_results, start=1):
-                frame_path = os.path.join(
-                    self.root, seq_name, "img1", f"{frame_id:06d}.jpg"
-                )
-
-                im_index = np.where(
-                    np.array(self._img_paths) == np.array(frame_path)
-                )[0].item()
-
+                im_index = self._convert_frame_to_img_idx[seq_name][frame_id]
                 annotation = self._get_annotation(im_index)
 
                 visible = annotation["visibilities"] > self._vis_threshold
@@ -339,7 +357,7 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
         fp = [[] for _ in range(len(self._img_paths))]
         npos = 0
 
-        for im_index in tqdm(list(results.keys())):
+        for im_index in list(results.keys()):
             annotation = self._get_annotation(im_index)
             visible = annotation["visibilities"] > self._vis_threshold
             npos += len(visible)
@@ -354,7 +372,7 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
         detector_eval_dict = detection_metrics_from_tp_and_fp(
             tp=tp, fp=fp, npos=npos
         )
-        return pd.DataFrame(detector_eval_dict).T
+        return detector_eval_dict
 
 
 def tp_and_fp_of_detection(im_gt, im_det, ovthresh=0.5):
@@ -414,6 +432,16 @@ def detection_metrics_from_tp_and_fp(tp, fp, npos):
 
     tp = np.cumsum(tp_flat)
     fp = np.cumsum(fp_flat)
+    if len(tp) == 0:
+        detector_eval_dict = {
+            "AP": 0.0,
+            "Prec": 0.0,
+            "Rec": 0.0,
+            "TP": 0,
+            "FP": 0,
+        }
+        return detector_eval_dict
+
     rec = tp / float(npos)
     # avoid divide by zero in case the first detection matches a difficult
     # ground truth (probably not needed in my code but doesn't harm if left)

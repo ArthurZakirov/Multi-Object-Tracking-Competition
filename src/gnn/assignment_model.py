@@ -192,20 +192,22 @@ class AssignmentWeightedAverage(AssignmentModel):
             if weight == 0:
                 continue
 
-            if metric == "box_iou_distance" and not current_boxes.isnan().any():
+            if "iou" in metric:
                 box_iou = torchvision.ops.box_iou(track_boxes, current_boxes)
+
+            if metric == "box_iou_distance":
+                assert not current_boxes.isnan().any()
                 distance_matrix = 1 - box_iou
 
-            if (
-                metric == "mask_iou_distance"
-                and not current_masks.isnan().any()
-            ):
+            if metric == "mask_iou_distance":
+                assert not current_masks.isnan().any()
                 mask_iou = binary_mask_iou(
                     track_masks, current_masks, box_iou=box_iou
                 )
                 distance_matrix = 1 - mask_iou
 
-            if metric == "reid_distance" and not current_features.isnan().any():
+            if metric == "reid_distance":
+                assert current_features.isnan().any()
                 distance_matrix = self.metric_fn(
                     track_features, current_features
                 )

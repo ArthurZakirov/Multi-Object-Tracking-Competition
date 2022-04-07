@@ -9,7 +9,7 @@ from src.tracker.data_track import MOT16, MOT16Sequence, split_sequence_names
 
 _sets = {}
 splits = [
-    "mini_with_gt",
+    "mini",
     "train",
     "test",
     "all",
@@ -119,6 +119,7 @@ class MOT16SequencePrecomputed(MOT16Sequence):
                     for frame_reid_file in listdir_nohidden(reid_dir)
                 ]
                 self._return_reid_on_det = True
+                print(self._frame_reid_paths)
             else:
                 print(
                     "You requestes reid on detection, but there is no such precompeted data in the given sequence dir!"
@@ -130,9 +131,7 @@ class MOT16SequencePrecomputed(MOT16Sequence):
             if os.path.exists(segmentation_dir):
                 self._frame_segmentation_paths = [
                     os.path.join(segmentation_dir, frame_segmentation_file)
-                    for frame_segmentation_file in listdir_nohidden(
-                        segmentation_dir
-                    )
+                    for frame_segmentation_file in os.listdir(segmentation_dir)
                 ]
                 self._return_det_segmentation = True
             else:

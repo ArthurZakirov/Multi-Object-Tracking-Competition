@@ -17,6 +17,7 @@ from src.gnn.dataset import LongTrackTrainingDataset
 from src.tracker.tracker import MyTracker
 from src.tracker.data_track import MOT16Sequences
 from src.utils.file_utils import ensure_dir
+from src.utils.train_utils import log_to_tensorboard
 
 SEED = 0
 random.seed(SEED)
@@ -116,15 +117,6 @@ def compute_class_metric(
     }
 
     return class_metrics_dict
-
-
-def log_to_tensorboard(metric_dict, step, summary_writer, mode="train"):
-    for metric_name, metric_value in metric_dict.items():
-        summary_writer.add_scalar(
-            tag=os.path.join(mode, metric_name),
-            scalar_value=metric_value,
-            global_step=step,
-        )
 
 
 def train_one_epoch(args, model, data_loader, optimizer, epoch, summary_writer):

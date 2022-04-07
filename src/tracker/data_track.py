@@ -1,5 +1,6 @@
 import configparser
 import csv
+from collections import defaultdict
 from msilib import sequence
 import os
 import os.path as osp
@@ -13,7 +14,7 @@ from src.detector.utils import decode_segmentation
 
 _sets = {}
 splits = [
-    "mini_with_gt",
+    "mini",
     "train",
     "test",
     "all",
@@ -49,7 +50,12 @@ for split in splits:
 def split_sequence_names(split, root_dir):
     train_sequences = list(listdir_nohidden(os.path.join(root_dir, "train")))
     test_sequences = ["MOT16-01", "MOT16-03", "MOT16-08", "MOT16-12"]
-    val_sequences = ["MOT16-02", "MOT16-05", "MOT16-09", "MOT16-11"]
+    val_sequences = [
+        "MOT16-02",
+        "MOT16-05",
+        "MOT16-09",
+        "MOT16-11",
+    ]  # these all contain segmentation
     val_sequences2 = ["MOT16-02", "MOT16-11"]
 
     if "train" == split:
@@ -72,8 +78,8 @@ def split_sequence_names(split, root_dir):
         sequences = val_sequences2
     elif f"MOT16-{split}" in train_sequences + test_sequences:
         sequences = [f"MOT16-{split}"]
-    elif "mini_with_gt" == split:
-        sequences = ["MOT16-02"]
+    elif "mini" == split:
+        sequences = ["MOT16-02-mini"]
     else:
         raise NotImplementedError("MOT split not available.")
     return sequences
@@ -226,30 +232,17 @@ class MOT16Sequence(Dataset):
         visibility = {}
         seg_imgs = {}
 
-        for i in range(1, seqLength + 1):
-            boxes[i] = {}
-            visibility[i] = {}
+        # for i in range(1, seqLength + 1):
+        #     boxes[i] = {}
+        #     visibility[i] = {}
 
         no_gt = False
         if osp.exists(gt_file):
-            with open(gt_file, "r") as inf:
-                reader = csv.reader(inf, delimiter=",")
-                for row in reader:
-                    # class person, certainity 1, visibility >= 0.25
-                    if (
-                        int(row[6]) == 1
-                        and int(row[7]) == 1
-                        and float(row[8]) >= self._vis_threshold
-                    ):
-                        # Make pixel indexes 0-based, should already be 0-based (or not)
-                        x1 = int(row[2]) - 1
-                        y1 = int(row[3]) - 1
-                        # This -1 accounts for the width (width of 1 x1=x2)
-                        x2 = x1 + int(row[4]) - 1
-                        y2 = y1 + int(row[5]) - 1
-                        bb = np.array([x1, y1, x2, y2], dtype=np.float32)
-                        boxes[int(row[0])][int(row[1])] = bb
-                        visibility[int(row[0])][int(row[1])] = float(row[8])
+            gt = load_detection_from_txt(
+                txt_path=gt_file, vis_threshold=self._vis_threshold, mode="gt"
+            )
+            visibility = gt["visibilities"]
+            boxes = gt["boxes"]
         else:
             no_gt = True
 
@@ -260,10 +253,15 @@ class MOT16Sequence(Dataset):
                     seg_img = Image.open(osp.join(seg_dir, seg_file))
                     seg_imgs[frame_id] = seg_img
 
-        for i in range(1, seqLength + 1):
-            img_path = osp.join(img_dir, f"{i:06d}.jpg")
+        for img_file in os.listdir(img_dir):
+            img_path = osp.join(img_dir, img_file)
+            i = int(img_file.split(".")[0])
 
-            datum = {"gt": boxes[i], "im_path": img_path, "vis": visibility[i]}
+            datum = {
+                "gt": boxes[i],
+                "im_path": img_path,
+                "vis": visibility[i],
+            }
 
             datum["seg_img"] = None
             if seg_imgs:
@@ -327,4 +325,43 @@ class MOT16Sequence(Dataset):
                             -1,
                         ]
                     )
+
+
+def load_detection_from_txt(txt_path, vis_threshold=0.0, mode="gt"):
+    """
+    modes: "det", "gt", "track"
+    """
+    boxes = defaultdict(dict)
+    visibility = defaultdict(dict)
+    gt = {}
+    with open(txt_path, "r") as inf:
+        reader = csv.reader(inf, delimiter=",")
+        for row in reader:
+            # class person, certainity 1, visibility >= 0.25
+            if mode == "gt" and not (
+                int(row[6]) == 1
+                and int(row[7]) == 1
+                and float(row[8]) >= vis_threshold
+            ):
+                continue
+            elif mode == "gt":
+                visibility[int(row[0])][int(row[1])] = float(row[8])
+
+            if mode == "det" and False:  # TODO add condition
+                continue
+            if mode == "track" and False:  # TODO add condition
+                continue
+            # Make pixel indexes 0-based, should already be 0-based (or not)
+            x1 = float(row[2]) - 1
+            y1 = float(row[3]) - 1
+            # This -1 accounts for the width (width of 1 x1=x2)
+            x2 = x1 + float(row[4]) - 1
+            y2 = y1 + float(row[5]) - 1
+            bb = np.array([x1, y1, x2, y2], dtype=np.float32)
+            boxes[int(row[0])][int(row[1])] = bb
+
+    gt["boxes"] = boxes
+    if mode == "gt":
+        gt["visibilities"] = visibility
+    return gt
 
