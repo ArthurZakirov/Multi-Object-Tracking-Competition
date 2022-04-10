@@ -1,5 +1,5 @@
 import collections
-
+import json
 import numpy as np
 import scipy
 
@@ -9,10 +9,13 @@ from scipy.optimize import linear_sum_assignment
 
 import motmetrics as mm
 
+from src.motion_prediction.model import KalmanPredictor
+
 mm.lap.default_solver = "lap"
 import src.market.metrics as metrics
 from src.utils.torch_utils import run_model_on_list
 from src.tracker.utils import get_crop_from_boxes
+from src.motion_prediction.kalman import FullBoxFilter
 
 _UNMATCHED_COST = 255
 
@@ -167,7 +170,11 @@ class ReIDTracker(Tracker):
         return distance
 
 
-class MyTracker(ReIDTracker):
+class MyTracker:
+    # TODO : don't worry about computational efficiency yet,
+    # you can later define params such as frequency of controlling long inactive tracks if they reappeared
+    # instead of doing it on every timestep
+
     def __init__(
         self,
         assign_model,
@@ -176,16 +183,35 @@ class MyTracker(ReIDTracker):
         distance_threshold,
         unmatched_cost,
         patience,
+        long_inactive_thresh,
+        submit_track_status,
+        short_motion_predictor,
+        long_motion_predictor,
+        **kwargs,
     ):
 
-        super().__init__(obj_detect=obj_detect)
+        super().__init__()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.obj_detect = obj_detect
         self.reid_model = reid_model
         self.assign_model = assign_model
+        self.short_motion_predictor = short_motion_predictor
+        self.long_motion_predictor = long_motion_predictor
 
         self.distance_threshold = distance_threshold
         self.unmatched_cost = unmatched_cost
         self.patience = patience
+        self._submit_track_status = submit_track_status
+
+        self.scene = Scene(long_inactive_thresh)
+        self.results = {}
+
+    def reset(self):
+        self.scene.reset()
+        self.results = {}
+
+    def get_results(self):
+        return self.results
 
     @classmethod
     def from_config(cls, hyperparams):
@@ -205,44 +231,55 @@ class MyTracker(ReIDTracker):
             else torch.load(hyperparams["assign_model"])
         )
 
+        if hyperparams["short_motion_predictor"] is None:
+            short_motion_predictor = None
+        elif ".pth" in hyperparams["short_motion_predictor"]:
+            short_motion_predictor = torch.load(
+                hyperparams["short_motion_predictor"]
+            )
+        elif "kalman" in hyperparams["short_motion_predictor"]:
+            with open(hyperparams["short_motion_predictor"], "r") as f:
+                predictor_config = json.load(f)
+            short_motion_predictor = KalmanPredictor.from_config(
+                predictor_config
+            )
+
+        if hyperparams["long_motion_predictor"] is None:
+            long_motion_predictor = None
+        elif ".pth" in hyperparams["long_motion_predictor"]:
+            long_motion_predictor = torch.load(
+                hyperparams["long_motion_predictor"]
+            )
+        elif "kalman" in hyperparams["long_motion_predictor"]:
+            with open(hyperparams["long_motion_predictor"], "r") as f:
+                predictor_config = json.load(f)
+            long_motion_predictor = KalmanPredictor.from_config(
+                predictor_config
+            )
+
         hyperparams.pop("obj_detect", None)
         hyperparams.pop("reid_model", None)
         hyperparams.pop("assign_model", None)
+        hyperparams.pop("short_motion_predictor", None)
+        hyperparams.pop("long_motion_predictor", None)
 
         tracker = cls.__new__(cls)
         tracker.__init__(
             **hyperparams,
             assign_model=assign_model,
             reid_model=reid_model,
-            obj_detect=obj_detect
+            obj_detect=obj_detect,
+            short_motion_predictor=short_motion_predictor,
+            long_motion_predictor=long_motion_predictor,
         )
         return tracker
 
-    @property
-    def track_boxes(self):
-        return torch.stack([t.box for t in self.tracks], axis=0)
-
-    @property
-    def track_ids(self):
-        return torch.stack([t.id for t in self.tracks], axis=0)
-
-    @property
-    def track_features(self):
-        return torch.stack([t.get_feature() for t in self.tracks], axis=0)
-
-    @property
-    def track_masks(self):
-        return torch.stack([t.get_mask() for t in self.tracks], axis=0)
-
-    @property
-    def track_time(self):
-        return torch.Tensor(
-            [self.im_index - t.inactive - 1 for t in self.tracks]
-        )
-
     def step(self, frame):
-        """This function should be called every timestep to perform tracking with a blob containing the image information.
-		"""
+        boxes, scores, pred_features, masks = self._compute_detection(frame)
+        self._data_association(boxes, scores, pred_features, masks)
+        self._update_results()
+
+    def _compute_detection(self, frame):
         # take detection from databasis if availablet
         if "boxes" in frame.keys():
             detection = frame
@@ -276,40 +313,87 @@ class MyTracker(ReIDTracker):
                 )
         else:
             pred_features = torch.nan * torch.ones((len(scores)))
+        return boxes, scores, pred_features, masks
 
-        # print("\n\nboxes", boxes.shape)
-        # print("scores", scores.shape)
-        # print("pred_features", pred_features.shape)
-        self.data_association(boxes, scores, pred_features, masks)
-        self.update_results()
+    def _predict_track_boxes(self):
+        s = self.scene
 
-    def update_results(self):
+        active_ids = s.track_ids("active")
+        long_inactive_ids = s.track_ids("long_inactive")
+        short_inactive_ids = s.track_ids("short_inactive")
+        with torch.no_grad():
+            if not self.short_motion_predictor is None and active_ids:
+                self.short_motion_predictor.eval()
+                active_trajs = s.track_trajectories("active")
+                active_pred_trajs = self.short_motion_predictor(
+                    trajs=active_trajs,
+                    future_lens=[1 for _ in range(len(active_trajs))],
+                )
+                active_pred_boxes = [traj[-1] for traj in active_pred_trajs]
+            else:
+                active_pred_boxes = s.track_boxes("active")
+
+            if not self.short_motion_predictor is None and short_inactive_ids:
+                short_inactive_trajs = s.track_trajectories("short_inactive")
+                short_inactive_counts = s.track_inactive_counts(
+                    "short_inactive"
+                )
+                short_inactive_pred_trajs = self.short_motion_predictor(
+                    trajs=short_inactive_trajs,
+                    future_lens=[count + 1 for count in short_inactive_counts],
+                )
+                short_inactive_pred_boxes = [
+                    traj[-1] for traj in short_inactive_pred_trajs
+                ]
+
+            else:
+                short_inactive_pred_boxes = s.track_boxes("short_inactive")
+
+            if not self.long_motion_predictor is None and long_inactive_ids:
+                long_inactive_trajs = s.track_trajectories("long_inactive")
+                long_inactive_counts = s.track_inactive_counts("long_inactive")
+                self.long_motion_predictor.eval()
+                long_inactive_pred_trajs = self.long_motion_predictor(
+                    trajs=long_inactive_trajs,
+                    future_lens=[count + 1 for count in long_inactive_counts],
+                )
+                long_inactive_pred_boxes = [
+                    traj[-1] for traj in long_inactive_pred_trajs
+                ]
+            else:
+                long_inactive_pred_boxes = s.track_boxes("long_inactive")
+
+        pred_box_dict = {}
+        pred_box_dict.update(dict(zip(active_ids, active_pred_boxes)))
+        pred_box_dict.update(
+            dict(zip(long_inactive_ids, long_inactive_pred_boxes))
+        )
+        pred_box_dict.update(
+            dict(zip(short_inactive_ids, short_inactive_pred_boxes))
+        )
+
+        pred_box_tensor = torch.stack(
+            list(dict(sorted(pred_box_dict.items())).values()), dim=0
+        )
+        return pred_box_tensor
+
+    def _update_results(self):
         """Only store boxes for tracks that are active"""
-        for t in self.tracks:
+        s = self.scene
+        submit_tracks = []
+        for status in self._submit_track_status:
+            submit_tracks.extend(s.get_tracks(status))
+
+        for t in submit_tracks:
             if t.id not in self.results.keys():
                 self.results[t.id] = {}
-            if t.inactive == 0:
-                self.results[t.id][self.im_index] = np.concatenate(
-                    [t.box.cpu().numpy(), np.array([t.score])]
-                )
-        self.im_index += 1
 
-    def add(self, new_boxes, new_scores, new_features, new_masks):
-        num_new = len(new_boxes)
-        for i in range(num_new):
-            self.tracks.append(
-                Track(
-                    box=new_boxes[i],
-                    score=new_scores[i],
-                    track_id=self.track_num + i,
-                    feature=new_features[i],
-                    inactive=0,
-                    mask=new_masks[i],
-                )
+            self.results[t.id][s.im_index] = np.concatenate(
+                [t.get_box().cpu().numpy(), np.array([t.score])]
             )
-        self.track_num += num_new
+        s.update_im_index()
 
-    def ùpdate_tracks(
+    def _ùpdate_tracks(
         self,
         matched_track_idx,
         unmatched_track_idx,
@@ -320,67 +404,73 @@ class MyTracker(ReIDTracker):
         pred_features,
         masks,
     ):
-
+        s = self.scene
+        tracks = s.tracks
         # update matched tracks
         for track_idx, box_idx in zip(matched_track_idx, matched_box_idx):
-            self.tracks[track_idx].box = boxes[box_idx]
-            self.tracks[track_idx].add_feature(pred_features[box_idx])
+            t = tracks[track_idx]
+            t.add_box(boxes[box_idx])
+            t.add_feature(pred_features[box_idx])
 
         # set matched tracks to "active"
         for track_idx in matched_track_idx:
-            self.tracks[track_idx].inactive = 0
+            t = tracks[track_idx]
+            t.inactive = 0
 
         # set unmatched tracks to "inactive"
         for track_idx in unmatched_track_idx:
-            self.tracks[track_idx].inactive += 1
+            t = tracks[track_idx]
+            t.inactive += 1
 
-        # remove long inactive tracks
+        # increase inactive count, and remove long inactive tracks
         remove_track_ids = []
         for track_idx in unmatched_track_idx:
-            self.tracks[track_idx].inactive += 1
-            if self.tracks[track_idx].inactive > self.patience:
-                remove_track_ids.append(self.tracks[track_idx].id)
-        self.tracks = [t for t in self.tracks if not t.id in remove_track_ids]
+            t = tracks[track_idx]
+            t.inactive += 1
+            if t.inactive > self.patience:
+                remove_track_ids.append(t.id)
+        tracks = [t for t in tracks if not t.id in remove_track_ids]
 
         # add new
         new_boxes = [boxes[idx] for idx in unmatched_box_idx]
         new_scores = [scores[idx] for idx in unmatched_box_idx]
         new_features = [pred_features[idx] for idx in unmatched_box_idx]
         new_masks = [masks[idx] for idx in unmatched_box_idx]
-        self.add(new_boxes, new_scores, new_features, new_masks)
 
-    def data_association(self, boxes, scores, pred_features, masks):
+        s.add(new_boxes, new_scores, new_features, new_masks)
+
+    def _data_association(self, boxes, scores, pred_features, masks):
         """
-    This method performs the management of the current tracks
+        This method performs the management of the current tracks
 
-    Arguments
-    ---------
-    boxes [N, 4]
-      - detector output boxes in the xyxy format
+        Arguments
+        ---------
+        boxes [N, 4]
+        - detector output boxes in the xyxy format
 
-    scores [N]
-      - detector output pedestrian probability
-    """
-
-        if len(self.tracks) == 0:
-            self.add(
+        scores [N]
+        - detector output pedestrian probability
+        """
+        s = self.scene
+        if len(s.tracks) == 0:
+            s.add(
                 new_boxes=boxes,
                 new_scores=scores,
                 new_features=pred_features,
                 new_masks=masks,
             )
-
         else:
+            track_boxes = self._predict_track_boxes()
             self.assign_model.eval()
             with torch.no_grad():
                 distance_matrix = self.assign_model(
-                    track_features=self.track_features,
+                    track_features=s.track_features("all"),
                     current_features=pred_features,
-                    track_boxes=self.track_boxes,
+                    track_boxes=track_boxes,
                     current_boxes=boxes,
-                    track_time=self.track_time,
-                    current_time=self.im_index * torch.ones_like(scores),
-                    track_masks=self.track_masks,
+                    track_time=s.track_time("all"),
+                    current_time=s.im_index * torch.ones_like(scores),
+                    track_masks=s.track_masks("all"),
                     current_masks=masks,
                 )
 
@@ -400,7 +490,7 @@ class MyTracker(ReIDTracker):
                 unmatched_cost=self.unmatched_cost,
             )
 
-            self.ùpdate_tracks(
+            self._ùpdate_tracks(
                 matched_track_idx,
                 unmatched_track_idx,
                 matched_box_idx,
@@ -410,6 +500,80 @@ class MyTracker(ReIDTracker):
                 pred_features,
                 masks,
             )
+
+
+class Scene:
+    def __init__(self, long_inactive_thresh):
+        self.tracks = []
+        self.im_index = 0
+        self.long_inactive_thresh = long_inactive_thresh
+
+    def reset(self):
+        self.tracks = []
+        self.im_index = 0
+
+    def update_im_index(self):
+        self.im_index += 1
+
+    def get_tracks(self, status="all"):
+        all_tracks = self.tracks
+        active_tracks = [t for t in self.tracks if t.inactive == 0]
+        long_inactive_tracks = [
+            t for t in self.tracks if t.inactive > self.long_inactive_thresh
+        ]
+        short_inactive_tracks = [
+            t
+            for t in self.tracks
+            if (t.inactive > 0 and t.inactive <= self.long_inactive_thresh)
+        ]
+        if status == "all":
+            return all_tracks
+        elif status == "active":
+            return active_tracks
+        elif status == "long_inactive":
+            return long_inactive_tracks
+        elif status == "short_inactive":
+            return short_inactive_tracks
+
+    def track_boxes(self, status="all"):
+        return [t.get_box() for t in self.get_tracks(status)]
+
+    def track_trajectories(self, status="all"):
+        return [t.get_trajectory() for t in self.get_tracks(status)]
+
+    def track_inactive_counts(self, status="all"):
+        return [t.inactive for t in self.get_tracks(status)]
+
+    def track_ids(self, status="all"):
+        return [t.id for t in self.get_tracks(status)]
+
+    def track_features(self, status="all"):
+        return torch.stack(
+            [t.get_feature() for t in self.get_tracks(status)], axis=0
+        )
+
+    def track_masks(self, status="all"):
+        return torch.stack(
+            [t.get_mask() for t in self.get_tracks(status)], axis=0
+        )
+
+    def track_time(self, status="all"):
+        return torch.Tensor(
+            [self.im_index - t.inactive - 1 for t in self.get_tracks(status)]
+        )
+
+    def add(self, new_boxes, new_scores, new_features, new_masks):
+        num_new = len(new_boxes)
+        for i in range(num_new):
+            new_track = Track(
+                box=new_boxes[i],
+                score=new_scores[i],
+                track_id=len(self.tracks) + 1,
+                feature=new_features[i],
+                inactive=0,
+                mask=new_masks[i],
+            )
+            self.tracks.append(new_track)
 
 
 class Track(object):
@@ -426,28 +590,44 @@ class Track(object):
         max_features_num=10,
     ):
         self.id = track_id
-        self.box = box
+        self.boxes = collections.deque([box])
         self.score = score
-        self.feature = collections.deque([feature])
-        self.mask = mask
+        self.features = collections.deque([feature])
+        self.masks = collections.deque([mask])
         self.inactive = inactive
         self.max_features_num = max_features_num
 
-    def add_feature(self, feature):
-        """Adds new appearance features to the object."""
-        self.feature.append(feature)
-        if len(self.feature) > self.max_features_num:
-            self.feature.popleft()
+    def add_box(self, box):
+        self.boxes.append(box)
+        if len(self.boxes) > self.max_features_num:
+            self.boxes.popleft()
 
-    def get_feature(self):
-        if len(self.feature) > 1:
-            feature = torch.stack(list(self.feature), dim=0)
-        else:
-            feature = self.feature[0].unsqueeze(0)
-        return feature[-1]
+    def get_box(self):
+        return self.boxes[-1]
+
+    def get_trajectory(self):
+        return torch.stack(list(self.boxes), dim=0)
+
+    def add_mask(self, mask):
+        self.masks.append(mask)
+        if len(self.masks) > self.max_features_num:
+            self.masks.popleft()
 
     def get_mask(self):
-        return self.mask
+        return self.masks[-1]
+
+    def add_feature(self, feature):
+        """Adds new appearance features to the object."""
+        self.features.append(feature)
+        if len(self.features) > self.max_features_num:
+            self.features.popleft()
+
+    def get_feature(self):
+        if len(self.features) > 1:
+            feature = torch.stack(list(self.features), dim=0)
+        else:
+            feature = self.features[0].unsqueeze(0)
+        return feature[-1]
 
 
 def hungarian_matching(distance_matrix, unmatched_cost):

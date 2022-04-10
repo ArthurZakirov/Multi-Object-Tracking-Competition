@@ -311,9 +311,6 @@ def run_tracker(sequences, tracker):
     for sequence in tqdm(sequences, desc="sequences", leave=True):
         tracker.reset()
 
-        sequence_loader = torch.utils.data.DataLoader(
-            sequence, batch_size=1, shuffle=False
-        )
         with torch.no_grad():
             for frame in tqdm(sequence, desc="frame", leave=False):
                 tracker.step(frame)
@@ -322,21 +319,9 @@ def run_tracker(sequences, tracker):
         results_seq[str(sequence)] = results_dict
 
         if not sequence.no_gt:
-            mot_accums.append(get_mot_accum(results_dict, sequence))
-
-    if mot_accums:
-        print("\nevaluate_mot_accums...")
-        eval_df = evaluate_mot_accums(
-            accums=mot_accums,
-            names=[
-                str(sequence) for sequence in sequences if not sequence.no_gt
-            ],
-            generate_overall=True,
-        )
-    else:
-        eval_df = None
-
-    return eval_df, results_seq
+            mot_accum = get_mot_accum(results_dict, sequence)
+            mot_accums.append(mot_accum)
+    return results_seq, mot_accums
 
 
 def load_distance_fn(metric):

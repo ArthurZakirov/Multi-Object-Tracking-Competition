@@ -191,3 +191,49 @@ def mask_convert(masks, inp_fmt, out_fmt):
         )
         masks_binary = masks_binary.permute(2, 0, 1)
         return masks_binary.int()
+
+
+def denormalize_boxes(anchor_boxes, normalized_boxes):
+    """
+    Arguments
+    ---------
+    anchor_boxes [N, 4]:        a batch of anchor boxes, where one anchor applies to L boxes
+    normalized_boxes [N, L, 4]: a batch of normalized boxes, L boxes grouped together share an anchor
+
+    Returns
+    -------
+    boxes [N, L, 4]
+    """
+    x_a, y_a, w_a, h_a = anchor_boxes.T
+    t_x, t_y, t_w, t_h = normalized_boxes.permute(2, 1, 0)
+
+    x = x_a + w_a * t_x
+    y = y_a + h_a * t_y
+    w = w_a * torch.exp(t_w)
+    h = h_a * torch.exp(t_h)
+
+    boxes = torch.stack([x, y, w, h], axis=-1).permute(1, 0, 2)
+    return boxes
+
+
+def normalize_boxes(anchor_boxes, boxes):
+    """
+    Arguments
+    ---------
+    anchor_boxes [N, 4]:        a batch of anchor boxes, where one anchor applies to L boxes
+    boxes [N, L, 4]: a batch of normalized boxes, L boxes grouped together share an anchor
+
+    Returns
+    -------
+    normalized_boxes [N, L, 4]
+    """
+    x_a, y_a, w_a, h_a = anchor_boxes.T
+    x, y, w, h = boxes.permute(2, 1, 0)
+
+    t_x = (x - x_a) / w_a
+    t_y = (y - y_a) / h_a
+    t_w = torch.log(w / w_a)
+    t_h = torch.log(h / h_a)
+
+    boxes = torch.stack([t_x, t_y, t_w, t_h], axis=-1).permute(1, 0, 2)
+    return boxes

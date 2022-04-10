@@ -8,7 +8,7 @@ from PIL import Image
 import numpy as np
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
-
+import torch
 from src.utils.file_utils import ensure_dir
 from src.detector.utils import decode_segmentation
 
@@ -357,7 +357,7 @@ def load_detection_from_txt(txt_path, vis_threshold=0.0, mode="gt"):
             # This -1 accounts for the width (width of 1 x1=x2)
             x2 = x1 + float(row[4]) - 1
             y2 = y1 + float(row[5]) - 1
-            bb = np.array([x1, y1, x2, y2], dtype=np.float32)
+            bb = torch.tensor([x1, y1, x2, y2], dtype=torch.float32)
             boxes[int(row[0])][int(row[1])] = bb
 
     gt["boxes"] = boxes

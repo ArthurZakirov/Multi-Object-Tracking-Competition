@@ -16,6 +16,7 @@ from src.gnn.assignment_model import AssignmentSimilarityNet
 from src.gnn.dataset import LongTrackTrainingDataset
 from src.tracker.tracker import MyTracker
 from src.tracker.data_track import MOT16Sequences
+from src.tracker.utils import evaluate_mot_accums
 from src.utils.file_utils import ensure_dir
 from src.utils.train_utils import log_to_tensorboard
 
@@ -231,7 +232,12 @@ def evaluate_one_epoch(args, assign_model):
         return_det_segmentation=assign_model.use_segmentation,
     )
 
-    eval_df, _ = run_tracker(sequences=sequences, tracker=tracker)
+    _, mot_accums = run_tracker(sequences=sequences, tracker=tracker)
+    eval_df = evaluate_mot_accums(
+        accums=mot_accums,
+        names=[str(sequence) for sequence in sequences if not sequence.no_gt],
+        generate_overall=True,
+    )
     idf1 = eval_df.loc["OVERALL"]["idf1"]
     return idf1
 
@@ -243,9 +249,7 @@ def main():
     output_dir = os.path.join(args.output_root_dir, time)
 
     summary_writer = SummaryWriter(output_dir)
-    print(
-        f"\n\n\look at tensorboard: \ntensorboard --logdir '{output_dir}'\n\n"
-    )
+    print(f"\n\nlook at tensorboard: \ntensorboard --logdir '{output_dir}'\n\n")
 
     output_model_config_path = os.path.join(output_dir, "model_config.json")
     with open(args.assign_model_config_path, "r") as f:

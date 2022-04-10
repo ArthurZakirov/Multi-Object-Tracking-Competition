@@ -56,6 +56,7 @@ parser.add_argument("--debug", action="store_true")
 parser.add_argument("--checkpoint_path", type=str, default=None)
 parser.add_argument("--eval_batch_frequency", type=int, default=1)
 parser.add_argument("--save_batch_frequency", type=int, default=1)
+parser.add_argument("--vis_batch_frequency", type=int, default=1)
 args = parser.parse_args()
 
 
@@ -231,6 +232,12 @@ def main(args):
                     "best_AP": best_AP,
                 }
                 torch.save(checkpoint_dir, save_model_path)
+
+            if batch_count % args.vis_batch_frequency == 0:
+                # TODO Visualization
+                obj_detect.eval()
+                with torch.no_grad():
+                    pass
 
 
 if __name__ == "__main__":

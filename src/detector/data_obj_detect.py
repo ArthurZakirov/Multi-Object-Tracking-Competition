@@ -6,7 +6,6 @@ import os
 import os.path as osp
 import pickle
 from tqdm import tqdm, trange
-
 from PIL import Image
 import numpy as np
 import scipy
@@ -17,6 +16,7 @@ import pandas as pd
 from src.detector.utils import decode_segmentation, mask_convert
 from src.tracker.data_track import split_sequence_names
 from src.utils.file_utils import listdir_nohidden
+from src.tracker.data_track import load_detection_from_txt
 
 
 def listdir_nohidden(path):
@@ -140,30 +140,11 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
             gt_file
         )
 
-        bounding_boxes = []
-        # if time, try to simplify with this function
-        #####################################
-        # gt = load_detection_from_txt(gt_file, vis_threshold=self._vis_threshold, mode="gt")
-        # bounding_boxes = gt["boxes"][file_index]
-        with open(gt_file, "r") as inf:
-            reader = csv.reader(inf, delimiter=",")
-            for row in reader:
-                visibility = float(row[8])
-                if (
-                    int(row[0]) == file_index
-                    and int(row[6]) == 1
-                    and int(row[7]) == 1
-                    and visibility >= self._vis_threshold
-                ):
-                    bb = {}
-                    bb["id"] = int(row[1])
-                    bb["bb_left"] = int(row[2])
-                    bb["bb_top"] = int(row[3])
-                    bb["bb_width"] = int(row[4])
-                    bb["bb_height"] = int(row[5])
-                    bb["visibility"] = float(row[8])
-
-                    bounding_boxes.append(bb)
+        gt = load_detection_from_txt(
+            gt_file, vis_threshold=self._vis_threshold, mode="gt"
+        )
+        bounding_boxes = gt["boxes"][file_index]
+        visibilities = gt["visibilities"][file_index]
 
         # - ids of objects for which bounding boxes are available
         # - it can be the case that more boxes than masks are available
@@ -175,7 +156,7 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
             masks = decode_segmentation(encoded_masks)
 
             seg_ids = torch.unique(masks)[1:]
-            box_ids = torch.Tensor([bb["id"] for bb in bounding_boxes])
+            box_ids = torch.Tensor(bounding_boxes.keys())
             remove_ids = [id for id in seg_ids if not id in box_ids]
 
             for remove_id in list(set(remove_ids)):
@@ -186,7 +167,10 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
             if self._only_obj_w_mask:
                 return_masks = binary_masks
                 bounding_boxes = [
-                    bb for bb in bounding_boxes if bb["id"] in seg_ids
+                    bb for (id, bb) in bounding_boxes.items() if id in seg_ids
+                ]
+                visibilities = [
+                    vis for (id, vis) in visibilities.items() if id in seg_ids
                 ]
             else:
                 padded_masks = torch.zeros_like(
@@ -196,25 +180,10 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
                     idx_of_id = torch.where(box_ids == seg_id)[0]
                     padded_masks[idx_of_id] = binary_mask
                 return_masks = padded_masks
-                bounding_boxes = bounding_boxes
 
-        num_objs = len(bounding_boxes)
-        boxes = torch.zeros((num_objs, 4), dtype=torch.float32)
-        visibilities = torch.zeros((num_objs), dtype=torch.float32)
-
-        for i, bb in enumerate(bounding_boxes):
-            # Make pixel indexes 0-based, should already be 0-based (or not)
-            x1 = bb["bb_left"] - 1
-            y1 = bb["bb_top"] - 1
-            # This -1 accounts for the width (width of 1 x1=x2)
-            x2 = x1 + bb["bb_width"] - 1
-            y2 = y1 + bb["bb_height"] - 1
-
-            boxes[i, 0] = x1
-            boxes[i, 1] = y1
-            boxes[i, 2] = x2
-            boxes[i, 3] = y2
-            visibilities[i] = bb["visibility"]
+        num_objs = len(bounding_boxes.keys())
+        boxes = torch.stack(list(bounding_boxes.values()), axis=0)
+        visibilities = torch.Tensor(list(visibilities.values()))
 
         sample = {
             "boxes": boxes,
