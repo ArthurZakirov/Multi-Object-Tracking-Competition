@@ -10,6 +10,7 @@ from PIL import Image
 import numpy as np
 import scipy
 import torch
+import torchvision
 import torchvision.transforms.functional as TF
 import pandas as pd
 
@@ -17,12 +18,6 @@ from src.detector.utils import decode_segmentation, mask_convert
 from src.tracker.data_track import split_sequence_names
 from src.utils.file_utils import listdir_nohidden
 from src.tracker.data_track import load_detection_from_txt
-
-
-def listdir_nohidden(path):
-    for f in os.listdir(path):
-        if not f.startswith("."):
-            yield f
 
 
 class MOT16ObjDetect(torch.utils.data.Dataset):
@@ -143,7 +138,7 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
         gt = load_detection_from_txt(
             gt_file, vis_threshold=self._vis_threshold, mode="gt"
         )
-        bounding_boxes = gt["boxes"][file_index]
+        boxes = gt["boxes"][file_index]
         visibilities = gt["visibilities"][file_index]
 
         # - ids of objects for which bounding boxes are available
@@ -151,50 +146,30 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
         # - we need to create padded masks for those masks, so that the index of masks matches the index of boxes
         # - padding will be all zeros and removed later again
         if self._segmentation:
-            seg_path = self._seg_paths[idx]
-            encoded_masks = TF.to_tensor(Image.open(seg_path))
-            masks = decode_segmentation(encoded_masks)
+            masks, keep_ids = load_segmentation(
+                seg_path=self._seg_paths[idx],
+                box_ids=torch.Tensor(boxes.keys()),
+                only_obj_with_mask=True,
+            )
+            boxes = {id: vis for (id, vis) in boxes.items() if id in keep_ids}
+            visibilities = {
+                id: vis for (id, vis) in visibilities.items() if id in keep_ids
+            }
 
-            seg_ids = torch.unique(masks)[1:]
-            box_ids = torch.Tensor(bounding_boxes.keys())
-            remove_ids = [id for id in seg_ids if not id in box_ids]
-
-            for remove_id in list(set(remove_ids)):
-                masks[remove_id == masks] = 0
-
-            binary_masks = mask_convert(masks, "scalar", "binary")
-
-            if self._only_obj_w_mask:
-                return_masks = binary_masks
-                bounding_boxes = [
-                    bb for (id, bb) in bounding_boxes.items() if id in seg_ids
-                ]
-                visibilities = [
-                    vis for (id, vis) in visibilities.items() if id in seg_ids
-                ]
-            else:
-                padded_masks = torch.zeros_like(
-                    masks, dtype=torch.float32
-                ).repeat(len(box_ids), 1, 1)
-                for binary_mask, seg_id in zip(binary_masks, seg_ids):
-                    idx_of_id = torch.where(box_ids == seg_id)[0]
-                    padded_masks[idx_of_id] = binary_mask
-                return_masks = padded_masks
-
-        num_objs = len(bounding_boxes.keys())
-        boxes = torch.stack(list(bounding_boxes.values()), axis=0)
+        num_objs = len(boxes.keys())
+        boxes = torch.stack(list(boxes.values()), axis=0)
         visibilities = torch.Tensor(list(visibilities.values()))
 
         sample = {
             "boxes": boxes,
             "labels": torch.ones((num_objs,), dtype=torch.int64),
             "image_id": torch.tensor([idx]),
-            "area": (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0]),
+            "area": torchvision.ops.box_area(boxes),
             "iscrowd": torch.zeros((num_objs,), dtype=torch.int64),
             "visibilities": visibilities,
         }
         if self._segmentation:
-            sample["masks"] = return_masks
+            sample.update({"masks": masks})
         return sample
 
     def __getitem__(self, idx):
@@ -441,3 +416,4 @@ def detection_metrics_from_tp_and_fp(tp, fp, npos):
         "FP": np.max(fp).item(),
     }
     return detector_eval_dict
+

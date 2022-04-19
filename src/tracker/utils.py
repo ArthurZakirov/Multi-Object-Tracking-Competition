@@ -2,10 +2,12 @@
 # Still ugly file with helper functions #
 #########################################
 
+from logging import raiseExceptions
 import random
 from collections import defaultdict
 from os import path as osp
 import csv
+from signal import raise_signal
 
 import matplotlib.pyplot as plt
 import motmetrics as mm
@@ -13,7 +15,7 @@ import numpy as np
 import torch
 from cycler import cycler as cy
 from scipy.interpolate import interp1d
-from torchvision.transforms import functional as F
+import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import torchvision
 from tqdm.auto import tqdm
@@ -347,7 +349,9 @@ def cosine_distance(input1, input2):
     return distmat
 
 
-def get_crop_from_boxes(boxes, image, output_height=256, output_width=128):
+def prepare_crops_for_reid(
+    image, boxes, masks=None, output_height=256, output_width=128
+):
     """Crops all persons from a frame given the boxes.
 
     Args:
@@ -356,16 +360,58 @@ def get_crop_from_boxes(boxes, image, output_height=256, output_width=128):
         height (int, optional): [description]. Defaults to 256.
         width (int, optional): [description]. Defaults to 128.
     """
-    person_crops = []
+
     norm_mean = [0.485, 0.456, 0.406]  # imagenet mean
     norm_std = [0.229, 0.224, 0.225]  # imagenet std
-    for box in boxes:
-        box = box.to(torch.int32)
-        res = image[:, :, box[1] : box[3], box[0] : box[2]]
-        res = F.interpolate(res, (output_height, output_width), mode="bilinear")
-        res = TF.normalize(res[0, ...], norm_mean, norm_std)
-        person_crops.append(res.unsqueeze(0))
-    return person_crops
+    person_crops = get_crops_from_boxes(boxes=boxes, image=image)
+    if not masks is None:
+        mask_crops = [
+            get_crops_from_boxes(
+                boxes=box.unsqueeze(0), image=mask.unsqueeze(0)
+            )[0]
+            for (box, mask) in zip(boxes, masks)
+        ]
+        person_crops = [
+            img_crop * mask_crop
+            for (img_crop, mask_crop) in zip(person_crops, mask_crops)
+        ]
+
+    prepared_crops = []
+    for crop in person_crops:
+        prepared_crop = F.interpolate(
+            crop.unsqueeze(0), (output_height, output_width), mode="bilinear"
+        )
+        prepared_crop = TF.normalize(prepared_crop, norm_mean, norm_std)
+        prepared_crops.append(prepared_crop)
+    return prepared_crops
+
+
+def get_crops_from_boxes(boxes, image):
+    """
+    image: [3, H, W]
+    """
+    crops = [image[:, box[1] : box[3], box[0] : box[2]] for box in boxes.int()]
+    assert len(crops) > 0
+    return crops
+
+
+def rgb2gray(image):
+    transform_vec = np.array([0.2989, 0.5870, 0.1140])
+    if image.shape[-1] == 3:
+        return np.dot(image, transform_vec)
+    elif image.shape[0] == 3:
+        return np.dot(image.permute(1, 2, 0), transform_vec)
+    else:
+        print("ERRORORORORORO")
+
+
+def image_luminance():
+    LuminanceA = (0.2126 * R) + (0.7152 * G) + (0.0722 * B)
+
+
+def normalize(image):
+    norm_mean = [0.485, 0.456, 0.406]  # imagenet mean
+    norm_std = [0.229, 0.224, 0.225]  # imagenet std
 
 
 def write_results(tracker_results_dict, output_path):

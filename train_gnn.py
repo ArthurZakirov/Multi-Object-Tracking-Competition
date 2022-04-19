@@ -259,17 +259,12 @@ def main():
     with open(output_model_config_path, "w") as f:
         json.dump(assign_model_hyperparams, f)
 
-    training_hyperparams = {
-        "learning_rate": args.learning_rate,
-        "lr_scheduler_step_size": args.lr_scheduler_step_size,
-        "batch_size": args.batch_size,
-        "num_epochs": args.num_epochs,
-    }
+
     output_training_config_path = os.path.join(
         output_dir, "training_config.json"
     )
     with open(output_training_config_path, "w") as f:
-        json.dump(training_hyperparams, f)
+        json.dump(args.__dict__, f)
 
     # load everything
     #########################################################################

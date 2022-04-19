@@ -12,14 +12,14 @@ def run_model_on_list(
         for inp in input_list:
             inp = inp.to(device)
             out = model(inp).cpu().clone()
-            outputs.append(outputs)
+            outputs.append(out)
     else:
         model.eval()
         with torch.no_grad():
             for inp in input_list:
                 inp = inp.to(device)
                 out = model(inp).cpu().clone()
-                outputs.append(outputs)
+                outputs.append(out)
     if concat:
         outputs = torch.cat(outputs, dim=0)
     return outputs

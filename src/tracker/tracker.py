@@ -1,4 +1,5 @@
 import collections
+import os
 import json
 import numpy as np
 import scipy
@@ -9,13 +10,14 @@ from scipy.optimize import linear_sum_assignment
 
 import motmetrics as mm
 
-from src.motion_prediction.model import KalmanPredictor
+from src.motion_prediction.model import KalmanPredictor, FullFilter
 
 mm.lap.default_solver = "lap"
 import src.market.metrics as metrics
 from src.utils.torch_utils import run_model_on_list
-from src.tracker.utils import get_crop_from_boxes
-from src.motion_prediction.kalman import FullBoxFilter
+from src.tracker.utils import prepare_crops_for_reid
+import torchvision
+from src.motion_prediction.kalman import obj_is_moving
 
 _UNMATCHED_COST = 255
 
@@ -175,18 +177,28 @@ class MyTracker:
     # you can later define params such as frequency of controlling long inactive tracks if they reappeared
     # instead of doing it on every timestep
 
+    # TODO the goal would be to have one model to smooth the traj and an independent model to predict on that smoothed track
+    # however if we use kalman for prediction, we also need to pass the state covariance and previous state
+    # so kalman predictor needs the raw trajectory and do smoothing and predicting combined
+    # there is no sexy solution for this, we need to do if else. Also we cant apply a filter to barely moving objects
+    # therefore the filter needs to freeze not moving object at one place
+
     def __init__(
         self,
-        assign_model,
-        reid_model,
-        obj_detect,
-        distance_threshold,
-        unmatched_cost,
-        patience,
-        long_inactive_thresh,
-        submit_track_status,
-        short_motion_predictor,
-        long_motion_predictor,
+        assign_model=None,
+        byte_assign_model=None,
+        reid_model=None,
+        obj_detect=None,
+        short_motion_predictor=None,
+        long_motion_predictor=None,
+        distance_threshold=0.5,
+        unmatched_cost=255,
+        patience=5,
+        long_inactive_thresh=5,
+        not_moving_thresh=0,
+        add_only_previously_hidden_objects=False,
+        use_byte=False,
+        submit_track_status=["active"],
         **kwargs,
     ):
 
@@ -202,8 +214,12 @@ class MyTracker:
         self.unmatched_cost = unmatched_cost
         self.patience = patience
         self._submit_track_status = submit_track_status
+        self.use_byte = use_byte
+        self.add_only_previously_hidden_objects = (
+            add_only_previously_hidden_objects
+        )
 
-        self.scene = Scene(long_inactive_thresh)
+        self.scene = Scene(long_inactive_thresh, not_moving_thresh)
         self.results = {}
 
     def reset(self):
@@ -225,10 +241,27 @@ class MyTracker:
             if hyperparams["reid_model"] is None
             else torch.load(hyperparams["reid_model"])
         )
+        if not hyperparams["reid_model"] is None:
+            reid_model.input_is_masked = json.load(
+                open(
+                    os.path.join(
+                        os.path.dirname(hyperparams["reid_model"]),
+                        "model_config.json",
+                    ),
+                    "r",
+                )
+            )["input_is_masked"]
+
         assign_model = (
             None
             if hyperparams["assign_model"] is None
             else torch.load(hyperparams["assign_model"])
+        )
+
+        byte_assign_model = (
+            None
+            if hyperparams["byte_assign_model"] is None
+            else torch.load(hyperparams["byte_assign_model"])
         )
 
         if hyperparams["short_motion_predictor"] is None:
@@ -260,27 +293,37 @@ class MyTracker:
         hyperparams.pop("obj_detect", None)
         hyperparams.pop("reid_model", None)
         hyperparams.pop("assign_model", None)
+        hyperparams.pop("byte_assign_model", None)
         hyperparams.pop("short_motion_predictor", None)
         hyperparams.pop("long_motion_predictor", None)
 
         tracker = cls.__new__(cls)
         tracker.__init__(
-            **hyperparams,
             assign_model=assign_model,
+            byte_assign_model=byte_assign_model,
             reid_model=reid_model,
             obj_detect=obj_detect,
             short_motion_predictor=short_motion_predictor,
             long_motion_predictor=long_motion_predictor,
+            **hyperparams,
         )
         return tracker
 
     def step(self, frame):
-        boxes, scores, pred_features, masks = self._compute_detection(frame)
-        self._data_association(boxes, scores, pred_features, masks)
-        self._update_results()
+        boxes, scores, masks = self._get_detection(frame)
+        pred_features = self._get_reid_features(frame, boxes, masks)
+        s = self.scene
+        track_box_dict = self._predict_track_boxes()
+        if len(s.tracks) == 0:
+            s.add(boxes, scores, pred_features, masks)
+        else:
+            self._data_association(
+                track_box_dict, boxes, scores, pred_features, masks
+            )
+        self._update_results(track_box_dict)
 
-    def _compute_detection(self, frame):
-        # take detection from databasis if availablet
+    def _get_detection(self, frame):
+        # take detection from databasis if available
         if "boxes" in frame.keys():
             detection = frame
         else:
@@ -297,13 +340,18 @@ class MyTracker:
             if not "masks" in detection.keys()
             else detection["masks"].cpu()
         )
+        return boxes, scores, masks
 
+    def _get_reid_features(self, frame, boxes, masks):
         # take reid features from databasis if available
         if "reid" in frame.keys():
             pred_features = frame["reid"].cpu()
         elif not self.reid_model is None:
-            crops = self.get_crop_from_boxes(boxes, frame)
             self.reid_model.eval()
+            reid_masks = masks if self.reid_model.input_is_masked else None
+            crops = prepare_crops_for_reid(
+                image=frame["img"], boxes=boxes, masks=reid_masks
+            )
             with torch.no_grad():
                 pred_features = run_model_on_list(
                     model=self.reid_model,
@@ -312,8 +360,8 @@ class MyTracker:
                     concat=True,
                 )
         else:
-            pred_features = torch.nan * torch.ones((len(scores)))
-        return boxes, scores, pred_features, masks
+            pred_features = torch.nan * torch.ones((len(boxes)))
+        return pred_features
 
     def _predict_track_boxes(self):
         s = self.scene
@@ -371,14 +419,9 @@ class MyTracker:
         pred_box_dict.update(
             dict(zip(short_inactive_ids, short_inactive_pred_boxes))
         )
+        return pred_box_dict
 
-        pred_box_tensor = torch.stack(
-            list(dict(sorted(pred_box_dict.items())).values()), dim=0
-        )
-        return pred_box_tensor
-
-    def _update_results(self):
-        """Only store boxes for tracks that are active"""
+    def _update_results(self, track_box_dict):
         s = self.scene
         submit_tracks = []
         for status in self._submit_track_status:
@@ -388,9 +431,13 @@ class MyTracker:
             if t.id not in self.results.keys():
                 self.results[t.id] = {}
 
-            self.results[t.id][s.im_index] = np.concatenate(
-                [t.get_box().cpu().numpy(), np.array([t.score])]
+            box = (
+                t.get_box().cpu().numpy()
+                if not t.inactive
+                else track_box_dict[t.id].cpu().numpy()
             )
+            score = np.array([t.score])
+            self.results[t.id][s.im_index] = np.concatenate([box, score])
         s.update_im_index()
 
     def _ùpdate_tracks(
@@ -406,6 +453,7 @@ class MyTracker:
     ):
         s = self.scene
         tracks = s.tracks
+
         # update matched tracks
         for track_idx, box_idx in zip(matched_track_idx, matched_box_idx):
             t = tracks[track_idx]
@@ -422,6 +470,14 @@ class MyTracker:
             t = tracks[track_idx]
             t.inactive += 1
 
+        # increase standing count, mark long standing tracks as distractors, they will not be submitted to results
+        for track_idx in matched_track_idx:
+            t = tracks[track_idx]
+            if not obj_is_moving(t.get_trajectory()):
+                t.not_moving += 1
+            else:
+                t.not_moving = 0
+
         # increase inactive count, and remove long inactive tracks
         remove_track_ids = []
         for track_idx in unmatched_track_idx:
@@ -432,14 +488,26 @@ class MyTracker:
         tracks = [t for t in tracks if not t.id in remove_track_ids]
 
         # add new
-        new_boxes = [boxes[idx] for idx in unmatched_box_idx]
-        new_scores = [scores[idx] for idx in unmatched_box_idx]
-        new_features = [pred_features[idx] for idx in unmatched_box_idx]
-        new_masks = [masks[idx] for idx in unmatched_box_idx]
+        new_boxes = []
+        new_scores = []
+        new_features = []
+        new_masks = []
+        for idx in unmatched_box_idx:
+            if self.add_only_previously_hidden_objects and not obj_is_occluded(
+                obj_box=boxes[idx],
+                other_boxes=torch.stack(s.track_boxes("active"), dim=0),
+            ):
+                continue
+            new_boxes.append(boxes[idx])
+            new_scores.append(scores[idx])
+            new_features.append(pred_features[idx])
+            new_masks.append(masks[idx])
 
         s.add(new_boxes, new_scores, new_features, new_masks)
 
-    def _data_association(self, boxes, scores, pred_features, masks):
+    def _data_association(
+        self, track_box_dict, boxes, scores, pred_features, masks
+    ):
         """
         This method performs the management of the current tracks
 
@@ -451,62 +519,87 @@ class MyTracker:
         scores [N]
         - detector output pedestrian probability
         """
+        track_box_tensor = torch.stack(
+            list(dict(sorted(track_box_dict.items())).values()), dim=0
+        )
         s = self.scene
-        if len(s.tracks) == 0:
-            s.add(
-                new_boxes=boxes,
-                new_scores=scores,
-                new_features=pred_features,
-                new_masks=masks,
-            )
-        else:
-            track_boxes = self._predict_track_boxes()
-            self.assign_model.eval()
-            with torch.no_grad():
-                distance_matrix = self.assign_model(
-                    track_features=s.track_features("all"),
-                    current_features=pred_features,
-                    track_boxes=track_boxes,
-                    current_boxes=boxes,
-                    track_time=s.track_time("all"),
-                    current_time=s.im_index * torch.ones_like(scores),
-                    track_masks=s.track_masks("all"),
-                    current_masks=masks,
-                )
+        self.assign_model.eval()
 
-            distance_matrix = np.where(
-                distance_matrix > self.distance_threshold,
-                self.unmatched_cost,
-                distance_matrix,
+        confident = scores > 0.5
+
+        with torch.no_grad():
+            distance_matrix = self.assign_model(
+                track_features=s.track_features("all"),
+                current_features=pred_features[confident],
+                track_boxes=track_box_tensor,
+                current_boxes=boxes[confident],
+                track_time=s.track_time("all"),
+                current_time=s.im_index * torch.ones(len(boxes[confident])),
+                track_masks=s.track_masks("all"),
+                current_masks=masks[confident],
+            )
+
+        (
+            matched_track_idx,
+            unmatched_track_idx,
+            matched_box_idx,
+            unmatched_box_idx,
+        ) = hungarian_matching(
+            distance_matrix=distance_matrix,
+            unmatched_cost=self.unmatched_cost,
+            distance_threshold=self.distance_threshold,
+        )
+        if self.use_byte:
+            byte_distance_matrix = self.byte_assign_model(
+                track_features=s.track_features("all")[unmatched_track_idx],
+                current_features=pred_features[~confident],
+                track_boxes=track_box_tensor[unmatched_track_idx],
+                current_boxes=boxes[~confident],
+                track_time=s.track_time("all")[unmatched_track_idx],
+                current_time=s.im_index * torch.ones(len(boxes[~confident])),
+                track_masks=s.track_masks("all")[unmatched_track_idx],
+                current_masks=masks[~confident],
             )
 
             (
-                matched_track_idx,
-                unmatched_track_idx,
-                matched_box_idx,
-                unmatched_box_idx,
+                local_matched_track_idx,
+                local_unmatched_track_idx,
+                local_matched_box_idx,
+                local_unmatched_box_idx,
             ) = hungarian_matching(
-                distance_matrix=distance_matrix,
+                distance_matrix=byte_distance_matrix,
                 unmatched_cost=self.unmatched_cost,
+                distance_threshold=self.distance_threshold,
             )
+            matched_track_idx.extend(
+                np.array(unmatched_track_idx)[local_matched_track_idx].tolist()
+            )
+            unmatched_track_idx = np.array(unmatched_track_idx)[
+                local_unmatched_track_idx
+            ].tolist()
+            matched_box_idx.extend(
+                np.where(boxes[~confident])[0][local_matched_box_idx].tolist()
+            )
+            unmatched_box_idx = unmatched_box_idx  # no change
 
-            self._ùpdate_tracks(
-                matched_track_idx,
-                unmatched_track_idx,
-                matched_box_idx,
-                unmatched_box_idx,
-                boxes,
-                scores,
-                pred_features,
-                masks,
-            )
+        self._ùpdate_tracks(
+            matched_track_idx,
+            unmatched_track_idx,
+            matched_box_idx,
+            unmatched_box_idx,
+            boxes,
+            scores,
+            pred_features,
+            masks,
+        )
 
 
 class Scene:
-    def __init__(self, long_inactive_thresh):
+    def __init__(self, long_inactive_thresh=5, not_moving_thresh=0):
         self.tracks = []
         self.im_index = 0
         self.long_inactive_thresh = long_inactive_thresh
+        self.not_moving_thresh = not_moving_thresh
 
     def reset(self):
         self.tracks = []
@@ -517,14 +610,25 @@ class Scene:
 
     def get_tracks(self, status="all"):
         all_tracks = self.tracks
-        active_tracks = [t for t in self.tracks if t.inactive == 0]
+        active_tracks = [
+            t
+            for t in self.tracks
+            if t.inactive == 0 and t.not_moving <= self.not_moving_thresh
+        ]
         long_inactive_tracks = [
-            t for t in self.tracks if t.inactive > self.long_inactive_thresh
+            t
+            for t in self.tracks
+            if t.inactive > self.long_inactive_thresh
+            and t.not_moving <= self.not_moving_thresh
         ]
         short_inactive_tracks = [
             t
             for t in self.tracks
-            if (t.inactive > 0 and t.inactive <= self.long_inactive_thresh)
+            if (
+                t.inactive > 0
+                and t.inactive <= self.long_inactive_thresh
+                and t.not_moving <= self.not_moving_thresh
+            )
         ]
         if status == "all":
             return all_tracks
@@ -586,6 +690,7 @@ class Track(object):
         track_id,
         feature=None,
         inactive=0,
+        not_moving=0,
         mask=None,
         max_features_num=10,
     ):
@@ -595,6 +700,7 @@ class Track(object):
         self.features = collections.deque([feature])
         self.masks = collections.deque([mask])
         self.inactive = inactive
+        self.not_moving = not_moving
         self.max_features_num = max_features_num
 
     def add_box(self, box):
@@ -607,6 +713,9 @@ class Track(object):
 
     def get_trajectory(self):
         return torch.stack(list(self.boxes), dim=0)
+
+    def set_trajectory(self, traj):
+        self.boxes = collections.deque(traj.flatten().chunk(chunks=len(traj)))
 
     def add_mask(self, mask):
         self.masks.append(mask)
@@ -630,7 +739,10 @@ class Track(object):
         return feature[-1]
 
 
-def hungarian_matching(distance_matrix, unmatched_cost):
+def hungarian_matching(distance_matrix, unmatched_cost, distance_threshold):
+    distance_matrix = np.where(
+        distance_matrix > distance_threshold, unmatched_cost, distance_matrix,
+    )
     row_idx, col_idx = linear_sum_assignment(distance_matrix)
     costs = distance_matrix[row_idx, col_idx]
     select_matched = np.where(costs != unmatched_cost)[0]
@@ -650,4 +762,30 @@ def hungarian_matching(distance_matrix, unmatched_cost):
         matched_box_idx,
         unmatched_box_idx,
     )
+
+
+def obj_is_occluded(
+    obj_box,
+    other_boxes,
+    image_height=1080,
+    image_width=1920,
+    img_edge_treshold=10,
+    iou_treshold=0.0,
+):
+    _, _, _, y_max_obj = obj_box
+    _, _, _, y_max_other = other_boxes.permute(1, 0)
+    iou = torchvision.ops.box_iou(obj_box.unsqueeze(0), other_boxes).squeeze()
+    occluded_by_other_objects = torch.logical_and(
+        iou > iou_treshold, y_max_obj < y_max_other
+    ).any()
+    close_to_img_edge = (
+        obj_box[0] < img_edge_treshold
+        or obj_box[2] > image_width - img_edge_treshold
+        or obj_box[1] < img_edge_treshold
+        or obj_box[3] > image_height - img_edge_treshold
+    )
+    if occluded_by_other_objects or close_to_img_edge:
+        return True
+    else:
+        return False
 

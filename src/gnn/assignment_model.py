@@ -5,48 +5,7 @@ import torch.nn.functional as F
 import torchvision
 
 from src.tracker.utils import load_distance_fn
-
-
-def binary_mask_iou(masks1, masks2, box_iou=None):
-    """
-  Arguments
-  ---------
-    masks1 : [N1, H, W]
-    masks2 : [N2, H, W]
-    box_iou : [N1, N2] can be passed for speedup
-
-  Returns
-  -------
-    iou_matrix : [N1, N2]
-  """
-    masks1_area = np.count_nonzero(masks1, axis=(-2, -1))
-    masks2_area = np.count_nonzero(masks2, axis=(-2, -1))
-    (masks1_area_matrix, masks2_area_matrix) = np.meshgrid(
-        masks2_area, masks1_area
-    )
-
-    intersection_matrix = []
-    for row, mask1 in enumerate(masks1):
-        if not box_iou is None:
-            intersection_row = np.zeros((len(masks2)))
-            notnull = np.where(box_iou[row] > 0)[0]
-            mask1 = np.tile(mask1, (len(notnull), 1, 1))
-            notnull_intersection_row = np.count_nonzero(
-                np.logical_and(mask1, masks2[notnull]), axis=(-2, -1)
-            )
-            intersection_row[notnull] = notnull_intersection_row
-        else:
-            mask1 = np.tile(mask1, (len(masks2), 1, 1))
-            intersection_row = np.count_nonzero(
-                np.logical_and(mask1, masks2), axis=(-2, -1)
-            )
-
-        intersection_matrix.append(intersection_row)
-    intersection_matrix = np.stack(intersection_matrix, axis=0)
-    union_matrix = masks1_area_matrix + masks2_area_matrix - intersection_matrix
-
-    iou_matrix = intersection_matrix / union_matrix
-    return iou_matrix
+from src.detector.utils import binary_mask_iou
 
 
 class BipartiteNeuralMessagePassingLayer(nn.Module):
@@ -144,9 +103,10 @@ class BipartiteNeuralMessagePassingLayer(nn.Module):
 
 
 class AssignmentModel(nn.Module):
-    def __init__(self, use_segmentation=False):
+    def __init__(self, use_segmentation=False, use_reid_features=False):
         super().__init__()
         self.use_segmentation = use_segmentation
+        self.use_reid_features = use_reid_features
 
     @classmethod
     def from_config(cls, hyperparams):
@@ -154,25 +114,13 @@ class AssignmentModel(nn.Module):
         self.__init__(**hyperparams)
         return self
 
-    def forward(
-        self,
-        track_features,
-        current_features,
-        track_boxes,
-        current_boxes,
-        track_time,
-        current_time,
-        track_masks,
-        current_masks,
-    ):
+    def forward(self):
         raise NotImplementedError()
 
 
 class AssignmentWeightedAverage(AssignmentModel):
-    def __init__(
-        self, combine_weights, distance_metric, use_segmentation=False
-    ):
-        super().__init__(use_segmentation)
+    def __init__(self, combine_weights, distance_metric, **kwargs):
+        super().__init__(**kwargs)
         self.combine_weights = combine_weights
         self.distance_fn = load_distance_fn(distance_metric)
 
@@ -207,8 +155,8 @@ class AssignmentWeightedAverage(AssignmentModel):
                 distance_matrix = 1 - mask_iou
 
             if metric == "reid_distance":
-                assert current_features.isnan().any()
-                distance_matrix = self.metric_fn(
+                assert not current_features.isnan().any()
+                distance_matrix = self.distance_fn(
                     track_features, current_features
                 )
 
@@ -231,9 +179,9 @@ class AssignmentSimilarityNet(AssignmentModel):
         num_steps,
         distance_metric,
         dropout=0.0,
-        use_segmentation=False,
+        **kwargs,
     ):
-        super().__init__(use_segmentation)
+        super().__init__(**kwargs)
         self.distance_fn = load_distance_fn(distance_metric)
         self.graph_net = BipartiteNeuralMessagePassingLayer(
             node_dim=node_dim, edge_dim=edge_dim, dropout=dropout

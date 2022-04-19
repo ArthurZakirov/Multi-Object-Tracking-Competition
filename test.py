@@ -1,16 +1,11 @@
-import time
+from src.tracker.visualization import get_visualization_functions
+import matplotlib.pyplot as plt
 
-print("start loop...")
-for _ in range(100):
-    try:
-        for _ in range(100):
-            try:
-                print("loop")
-                time.sleep(5)
-            except KeyboardInterrupt:
-                break
-    except KeyboardInterrupt:
-        break
+# ENTER PATH TO SEQUENCE
+sequence_dir = "results\\tracker\\11-04-2022_00-28\\MOT16-02-mini"
 
-print("continue after loop...")
+# ACCESS PLOT FUNCTION VIA KEY ["detections", "lost_tracks"]
+vis_functions = get_visualization_functions(sequence_dir)
+fig = vis_functions["detections"](frame_id=6, type="FP")
 
+plt.show()

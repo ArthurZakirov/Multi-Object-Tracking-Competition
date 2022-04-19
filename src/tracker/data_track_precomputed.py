@@ -2,10 +2,12 @@ from msilib import sequence
 import os
 import torch
 from PIL import Image
+import torchvision
 import torchvision.transforms.functional as TF
-from src.detector.utils import decode_segmentation, mask_convert
+from src.detector.data_utils import decode_segmentation, load_segmentation
 from src.utils.file_utils import listdir_nohidden
 from src.tracker.data_track import MOT16, MOT16Sequence, split_sequence_names
+from src.tracker.utils import rgb2gray, get_crops_from_boxes
 
 _sets = {}
 splits = [
@@ -95,6 +97,8 @@ class MOT16SequencePrecomputed(MOT16Sequence):
         return_det_segmentation=False,
         return_gt_segmentation=False,
         only_obj_w_mask=True,
+        return_image=True,
+        return_statistical_info=False,
     ):
         super().__init__(
             seq_name=seq_name,
@@ -104,6 +108,9 @@ class MOT16SequencePrecomputed(MOT16Sequence):
             only_obj_w_mask=only_obj_w_mask,
             root_dir=original_data_root_dir,
         )
+
+        self._return_image = return_image
+        self._return_statistical_info = return_statistical_info
 
         detection_path = os.path.join(precomputed_seq_dir, "detection.pth")
         self._sequence_detection = torch.load(detection_path)
@@ -119,7 +126,6 @@ class MOT16SequencePrecomputed(MOT16Sequence):
                     for frame_reid_file in listdir_nohidden(reid_dir)
                 ]
                 self._return_reid_on_det = True
-                print(self._frame_reid_paths)
             else:
                 print(
                     "You requestes reid on detection, but there is no such precompeted data in the given sequence dir!"
@@ -141,33 +147,39 @@ class MOT16SequencePrecomputed(MOT16Sequence):
 
     def __getitem__(self, idx):
         # tracking data
-        frame_data = self.data[idx]
-        frame_detection = self._sequence_detection[idx]
-        frame_img = TF.to_tensor(
-            Image.open(frame_data["im_path"]).convert("RGB")
-        )
-        frame = {
-            "boxes": frame_detection["boxes"],
-            "scores": frame_detection["scores"],
-            "gt": frame_data["gt"],
-            "vis": frame_data["vis"],
-            "img": frame_img,
-        }
+        frame = super().__getitem__(idx)
+        frame.update(self._sequence_detection[idx])
 
         # precomputed detection / segmentation
         if self._return_det_segmentation:
-            frame_encoded_mask = TF.to_tensor(
-                Image.open(self._frame_segmentation_paths[idx])
-            ).squeeze(0)
-            frame_scalar_mask = decode_segmentation(frame_encoded_mask)
-            frame_binary_masks = mask_convert(
-                frame_scalar_mask, "scalar", "binary"
+            masks, _ = load_segmentation(
+                seg_path=self._frame_segmentation_paths[idx]
             )
-            frame["masks"] = frame_binary_masks
+            frame["masks"] = masks
 
         # precomputed reid
         if self._return_reid_on_det:
             reid = torch.load(self._frame_reid_paths[idx])
             frame["reid"] = reid
 
+        # darkness: additional stuff that I use for my analysis
+        if self._return_statistical_info:
+            crops = {
+                id: get_crops_from_boxes(
+                    boxes=box.unsqueeze(0), image=frame["img"]
+                )[0]
+                for (id, box) in frame["gt"].items()
+            }
+            grey_crops = {id: rgb2gray(crop) for (id, crop) in crops.items()}
+            luminosity = {id: crop.mean() for (id, crop) in grey_crops.items()}
+            contrast = {id: crop.std() for (id, crop) in grey_crops.items()}
+            frame["luminosity"] = luminosity
+            frame["contrast"] = contrast
+
+            # area: additional stuff that I use for my analysis
+            area = {
+                id: torchvision.ops.box_area(box.unsqueeze(0)).item()
+                for (id, box) in frame["gt"].items()
+            }
+            frame["area"] = area
         return frame

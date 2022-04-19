@@ -25,10 +25,10 @@ class DataManager(object):
         self,
         height=256,
         width=128,
-        transforms='random_flip',
+        transforms="random_flip",
         norm_mean=None,
         norm_std=None,
-        use_gpu=False
+        use_gpu=False,
     ):
         self.height = height
         self.width = width
@@ -38,10 +38,10 @@ class DataManager(object):
             self.width,
             transforms=transforms,
             norm_mean=norm_mean,
-            norm_std=norm_std
+            norm_std=norm_std,
         )
 
-        self.use_gpu = (torch.cuda.is_available() and use_gpu)
+        self.use_gpu = torch.cuda.is_available() and use_gpu
 
     @property
     def num_train_pids(self):
@@ -59,8 +59,8 @@ class DataManager(object):
         Args:
             name (str): dataset name.
         """
-        query_loader = self.test_dataset[name]['query']
-        gallery_loader = self.test_dataset[name]['gallery']
+        query_loader = self.test_dataset[name]["query"]
+        gallery_loader = self.test_dataset[name]["gallery"]
         return query_loader, gallery_loader
 
     def preprocess_pil_img(self, img):
@@ -115,14 +115,15 @@ class ImageDataManager(DataManager):
         # return train loader of target data
         train_loader_t = datamanager.train_loader_t
     """
-    data_type = 'image'
+    data_type = "image"
 
     def __init__(
         self,
-        root='',
+        root="",
+        masked=False,
         height=256,
         width=128,
-        transforms='random_flip',
+        transforms="random_flip",
         k_tfm=1,
         norm_mean=None,
         norm_std=None,
@@ -133,8 +134,8 @@ class ImageDataManager(DataManager):
         batch_size_test=32,
         workers=4,
         num_instances=4,
-        train_sampler='RandomSampler',
-        market1501_500k=False
+        train_sampler="RandomSampler",
+        market1501_500k=False,
     ):
 
         super(ImageDataManager, self).__init__(
@@ -143,18 +144,19 @@ class ImageDataManager(DataManager):
             transforms=transforms,
             norm_mean=norm_mean,
             norm_std=norm_std,
-            use_gpu=use_gpu
+            use_gpu=use_gpu,
         )
 
-        print('=> Loading train (source) dataset')
+        print("=> Loading train (source) dataset")
         trainset = Market1501(
             transform=self.transform_tr,
             k_tfm=k_tfm,
-            mode='train',
+            masked=masked,
+            mode="train",
             combineall=combineall,
             root=root,
             split_id=split_id,
-            market1501_500k=market1501_500k
+            market1501_500k=market1501_500k,
         )
 
         self._num_train_pids = trainset.num_train_pids
@@ -168,72 +170,69 @@ class ImageDataManager(DataManager):
                 batch_size=batch_size_train,
                 num_instances=num_instances,
                 num_cams=1,
-                num_datasets=1
+                num_datasets=1,
             ),
             batch_size=batch_size_train,
             shuffle=False,
             num_workers=workers,
             pin_memory=self.use_gpu,
-            drop_last=True
+            drop_last=True,
         )
-        self.sources = ['market1501']
-        self.targets = ['market1501']
-        print('=> Loading test (target) dataset')
-        self.test_loader = {
-            'query': None,
-            'gallery': None
-        }
-        self.test_dataset = {
-            'query': None,
-            'gallery': None
-        }
+        self.sources = ["market1501"]
+        self.targets = ["market1501"]
+        print("=> Loading test (target) dataset")
+        self.test_loader = {"query": None, "gallery": None}
+        self.test_dataset = {"query": None, "gallery": None}
 
         queryset = Market1501(
             transform=self.transform_te,
-            mode='query',
+            masked=masked,
+            mode="query",
             combineall=combineall,
             root=root,
             split_id=split_id,
-            market1501_500k=market1501_500k
+            market1501_500k=market1501_500k,
         )
-        self.test_loader['query'] = torch.utils.data.DataLoader(
+        self.test_loader["query"] = torch.utils.data.DataLoader(
             queryset,
             batch_size=batch_size_test,
             shuffle=False,
             num_workers=workers,
             pin_memory=self.use_gpu,
-            drop_last=False
+            drop_last=False,
         )
 
         # build gallery loader
         galleryset = Market1501(
             transform=self.transform_te,
-            mode='gallery',
+            masked=masked,
+            mode="gallery",
             combineall=combineall,
             verbose=False,
             root=root,
             split_id=split_id,
-            market1501_500k=market1501_500k
+            market1501_500k=market1501_500k,
         )
-        self.test_loader['gallery'] = torch.utils.data.DataLoader(
+        self.test_loader["gallery"] = torch.utils.data.DataLoader(
             galleryset,
             batch_size=batch_size_test,
             shuffle=False,
             num_workers=workers,
             pin_memory=self.use_gpu,
-            drop_last=False
+            drop_last=False,
         )
 
-        self.test_dataset['query'] = queryset.query
-        self.test_dataset['gallery'] = galleryset.gallery
+        self.test_dataset["query"] = queryset.query
+        self.test_dataset["gallery"] = galleryset.gallery
 
-        print('\n')
-        print('  **************** Summary ****************')
-        print('  source            : {}'.format(self.sources))
-        print('  # source datasets : {}'.format(len(self.sources)))
-        print('  # source ids      : {}'.format(self.num_train_pids))
-        print('  # source images   : {}'.format(len(trainset)))
-        print('  # source cameras  : {}'.format(self.num_train_cams))
-        print('  target            : {}'.format(self.targets))
-        print('  *****************************************')
-        print('\n')
+        print("\n")
+        print("  **************** Summary ****************")
+        print("  source            : {}".format(self.sources))
+        print("  # source datasets : {}".format(len(self.sources)))
+        print("  # source ids      : {}".format(self.num_train_pids))
+        print("  # source images   : {}".format(len(trainset)))
+        print("  # source cameras  : {}".format(self.num_train_cams))
+        print("  target            : {}".format(self.targets))
+        print("  *****************************************")
+        print("\n")
+

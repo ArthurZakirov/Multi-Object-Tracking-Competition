@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torchvision
 from torch.utils.data import DataLoader
-from src.detector.object_detector import init_detector_from_config
+from src.detector.object_detector import init_detector
 from src.utils.file_utils import ensure_dir
 from src.tracker.data_track import MOT16Sequences
 from src.detector.data_obj_detect import MOT16ObjDetect

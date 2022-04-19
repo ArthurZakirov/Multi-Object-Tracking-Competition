@@ -2,13 +2,13 @@ import torch.nn as nn
 import torch
 
 from src.detector.utils import normalize_boxes, denormalize_boxes
-from src.motion_prediction.kalman import FullBoxFilter
+from src.motion_prediction.kalman import FullFilter
 
 
 class KalmanPredictor(nn.Module):
     def __init__(self, process_variance, measurement_variance, **kwargs):
         super().__init__()
-        self.kalman = FullBoxFilter(
+        self.kalman = FullFilter(
             process_variance=process_variance,
             measurement_variance=measurement_variance,
         )

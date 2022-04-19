@@ -1,4 +1,5 @@
 from __future__ import division, print_function, absolute_import
+from tqdm import tqdm, trange
 import torch
 import numpy as np
 
@@ -24,7 +25,7 @@ def eval_market1501(distmat, q_pids, g_pids, q_camids, g_camids, max_rank):
     all_AP = []
     num_valid_q = 0. # number of valid query
 
-    for q_idx in range(num_q):
+    for q_idx in trange(num_q, desc="compute eval metrics", leave=False):
         # get query pid and camid
         q_pid = q_pids[q_idx]
         q_camid = q_camids[q_idx]

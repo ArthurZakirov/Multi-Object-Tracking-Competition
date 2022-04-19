@@ -19,12 +19,13 @@ def read_image(path):
         raise IOError('"{}" does not exist'.format(path))
     while not got_img:
         try:
-            img = Image.open(path).convert('RGB')
+            img = Image.open(path).convert("RGB")
             got_img = True
         except IOError:
             print(
-                'IOError incurred when reading "{}". Will redo. Don\'t worry. Just chill.'
-                .format(path)
+                'IOError incurred when reading "{}". Will redo. Don\'t worry. Just chill.'.format(
+                    path
+                )
             )
     return img
 
@@ -64,7 +65,7 @@ class Dataset(object):
         gallery,
         transform=None,
         k_tfm=1,
-        mode='train',
+        mode="train",
         combineall=False,
         verbose=True,
         **kwargs
@@ -95,16 +96,16 @@ class Dataset(object):
         if self.combineall:
             self.combine_all()
 
-        if self.mode == 'train':
+        if self.mode == "train":
             self.data = self.train
-        elif self.mode == 'query':
+        elif self.mode == "query":
             self.data = self.query
-        elif self.mode == 'gallery':
+        elif self.mode == "gallery":
             self.data = self.gallery
         else:
             raise ValueError(
-                'Invalid mode. Got {}, but expected to be '
-                'one of [train | query | gallery]'.format(self.mode)
+                "Invalid mode. Got {}, but expected to be "
+                "one of [train | query | gallery]".format(self.mode)
             )
 
         if self.verbose:
@@ -236,18 +237,26 @@ class Dataset(object):
         num_gallery_pids = self.get_num_pids(self.gallery)
         num_gallery_cams = self.get_num_cams(self.gallery)
 
-        msg = '  ----------------------------------------\n' \
-              '  subset   | # ids | # items | # cameras\n' \
-              '  ----------------------------------------\n' \
-              '  train    | {:5d} | {:7d} | {:9d}\n' \
-              '  query    | {:5d} | {:7d} | {:9d}\n' \
-              '  gallery  | {:5d} | {:7d} | {:9d}\n' \
-              '  ----------------------------------------\n' \
-              '  items: images/tracklets for image/video dataset\n'.format(
-                  num_train_pids, len(self.train), num_train_cams,
-                  num_query_pids, len(self.query), num_query_cams,
-                  num_gallery_pids, len(self.gallery), num_gallery_cams
-              )
+        msg = (
+            "  ----------------------------------------\n"
+            "  subset   | # ids | # items | # cameras\n"
+            "  ----------------------------------------\n"
+            "  train    | {:5d} | {:7d} | {:9d}\n"
+            "  query    | {:5d} | {:7d} | {:9d}\n"
+            "  gallery  | {:5d} | {:7d} | {:9d}\n"
+            "  ----------------------------------------\n"
+            "  items: images/tracklets for image/video dataset\n".format(
+                num_train_pids,
+                len(self.train),
+                num_train_cams,
+                num_query_pids,
+                len(self.query),
+                num_query_cams,
+                num_gallery_pids,
+                len(self.gallery),
+                num_gallery_cams,
+            )
+        )
 
         return msg
 
@@ -285,11 +294,11 @@ class ImageDataset(Dataset):
         if self.transform is not None:
             img = self._transform_image(self.transform, self.k_tfm, img)
         item = {
-            'img': img,
-            'pid': pid,
-            'camid': camid,
-            'impath': img_path,
-            'dsetid': dsetid
+            "img": img,
+            "pid": pid,
+            "camid": camid,
+            "impath": img_path,
+            "dsetid": dsetid,
         }
         return item
 
@@ -303,26 +312,27 @@ class ImageDataset(Dataset):
         num_gallery_pids = self.get_num_pids(self.gallery)
         num_gallery_cams = self.get_num_cams(self.gallery)
 
-        print('=> Loaded {}'.format(self.__class__.__name__))
-        print('  ----------------------------------------')
-        print('  subset   | # ids | # images | # cameras')
-        print('  ----------------------------------------')
+        print("=> Loaded {}".format(self.__class__.__name__))
+        print("  ----------------------------------------")
+        print("  subset   | # ids | # images | # cameras")
+        print("  ----------------------------------------")
         print(
-            '  train    | {:5d} | {:8d} | {:9d}'.format(
+            "  train    | {:5d} | {:8d} | {:9d}".format(
                 num_train_pids, len(self.train), num_train_cams
             )
         )
         print(
-            '  query    | {:5d} | {:8d} | {:9d}'.format(
+            "  query    | {:5d} | {:8d} | {:9d}".format(
                 num_query_pids, len(self.query), num_query_cams
             )
         )
         print(
-            '  gallery  | {:5d} | {:8d} | {:9d}'.format(
+            "  gallery  | {:5d} | {:8d} | {:9d}".format(
                 num_gallery_pids, len(self.gallery), num_gallery_cams
             )
         )
-        print('  ----------------------------------------')
+        print("  ----------------------------------------")
+
 
 class Market1501(ImageDataset):
     """Market1501.
@@ -334,24 +344,29 @@ class Market1501(ImageDataset):
         - identities: 1501 (+1 for background).
         - images: 12936 (train) + 3368 (query) + 15913 (gallery).
     """
-    _junk_pids = [0, -1]
-    dataset_dir = 'data/market'
 
-    def __init__(self, root='', market1501_500k=False, **kwargs):
-        self.root = osp.abspath(osp.expanduser(root))
-        self.dataset_dir = osp.join(self.root, self.dataset_dir)
+    _junk_pids = [0, -1]
+
+    def __init__(self, masked=False, root="", market1501_500k=False, **kwargs):
 
         # allow alternative directory structure
-        self.data_dir = self.dataset_dir
-
-        self.train_dir = osp.join(self.data_dir, 'bounding_box_train')
-        self.query_dir = osp.join(self.data_dir, 'query')
-        self.gallery_dir = osp.join(self.data_dir, 'bounding_box_test')
-        self.extra_gallery_dir = osp.join(self.data_dir, 'images')
+        self.data_dir = root
+        masked_flag = "_masked" if masked else ""
+        self.train_dir = osp.join(
+            self.data_dir, "bounding_box_train" + masked_flag
+        )
+        self.query_dir = osp.join(self.data_dir, "query" + masked_flag)
+        self.gallery_dir = osp.join(
+            self.data_dir, "bounding_box_test" + masked_flag
+        )
+        self.extra_gallery_dir = osp.join(self.data_dir, "images")
         self.market1501_500k = market1501_500k
 
         required_files = [
-            self.data_dir, self.train_dir, self.query_dir, self.gallery_dir
+            self.data_dir,
+            self.train_dir,
+            self.query_dir,
+            self.gallery_dir,
         ]
         if self.market1501_500k:
             required_files.append(self.extra_gallery_dir)
@@ -366,25 +381,25 @@ class Market1501(ImageDataset):
         super(Market1501, self).__init__(train, query, gallery, **kwargs)
 
     def process_dir(self, dir_path, relabel=False):
-        img_paths = glob.glob(osp.join(dir_path, '*.jpg'))
-        pattern = re.compile(r'([-\d]+)_c(\d)')
+        img_paths = glob.glob(osp.join(dir_path, "*.jpg"))
+        pattern = re.compile(r"([-\d]+)_c(\d)")
 
         pid_container = set()
         for img_path in img_paths:
             pid, _ = map(int, pattern.search(img_path).groups())
             if pid == -1:
-                continue # junk images are just ignored
+                continue  # junk images are just ignored
             pid_container.add(pid)
-        pid2label = {pid: label for label, pid in enumerate(pid_container)}
+        pid2label = {pid: label for (label, pid) in enumerate(pid_container)}
 
         data = []
         for img_path in img_paths:
             pid, camid = map(int, pattern.search(img_path).groups())
             if pid == -1:
-                continue # junk images are just ignored
-            assert 0 <= pid <= 1501 # pid == 0 means background
+                continue  # junk images are just ignored
+            assert 0 <= pid <= 1501  # pid == 0 means background
             assert 1 <= camid <= 6
-            camid -= 1 # index starts from 0
+            camid -= 1  # index starts from 0
             if relabel:
                 pid = pid2label[pid]
             data.append((img_path, pid, camid))

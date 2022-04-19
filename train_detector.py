@@ -16,7 +16,7 @@ import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 from torch.utils.data import DataLoader
-from src.detector.object_detector import init_detector_from_config
+from src.detector.object_detector import init_detector
 from src.utils.file_utils import ensure_dir
 from src.tracker.data_track import MOT16Sequences
 from src.detector.data_obj_detect import MOT16ObjDetect
@@ -87,7 +87,7 @@ def main(args):
         detector_name = hyperparams["name"]
         file_name = "best_" + detector_name + "_" + dataset_name + ".pth"
 
-        obj_detect = init_detector_from_config(hyperparams)
+        obj_detect = init_detector(**hyperparams)
 
         params = [p for p in obj_detect.parameters() if p.requires_grad]
         optimizer = torch.optim.SGD(
@@ -113,7 +113,7 @@ def main(args):
         model_config_path = os.path.join(output_dir, "model_config.json")
         with open(model_config_path, "r") as f:
             hyperparams = json.load(f)
-        obj_detect = init_detector_from_config(hyperparams)
+        obj_detect = init_detector(**hyperparams)
 
         train_config_path = os.path.join(output_dir, "train_config.json")
         with open(train_config_path, "r") as f:

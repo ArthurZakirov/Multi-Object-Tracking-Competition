@@ -15,7 +15,12 @@ model_urls = {
 
 
 def build_model(
-    name, num_classes, loss="softmax", pretrained=True, use_gpu=True
+    name,
+    num_classes,
+    loss="softmax",
+    pretrained=True,
+    use_gpu=True,
+    input_is_masked=False,
 ):
     """A function wrapper for building a model.
     Args:
@@ -46,6 +51,7 @@ def build_model(
         loss=loss,
         pretrained=pretrained,
         use_gpu=use_gpu,
+        input_is_masked=input_is_masked,
     )
 
 
@@ -393,6 +399,12 @@ class ResNet(nn.Module):
             raise KeyError("Unsupported loss: {}".format(self.loss))
 
 
+class REIDModel(ResNet):
+    def __init__(self, input_is_masked, **kwargs):
+        super().__init__(**kwargs)
+        self.input_is_masked = input_is_masked
+
+
 def init_pretrained_weights(model, model_url):
     """Initializes model with pretrained weights.
     
@@ -412,8 +424,15 @@ def init_pretrained_weights(model, model_url):
 """ResNet"""
 
 
-def resnet18(num_classes, loss="softmax", pretrained=True, **kwargs):
-    model = ResNet(
+def resnet18(
+    num_classes,
+    loss="softmax",
+    pretrained=True,
+    input_is_masked=False,
+    **kwargs
+):
+    model = REIDModel(
+        input_is_masked=input_is_masked,
         num_classes=num_classes,
         loss=loss,
         block=BasicBlock,
@@ -428,8 +447,15 @@ def resnet18(num_classes, loss="softmax", pretrained=True, **kwargs):
     return model
 
 
-def resnet34(num_classes, loss="softmax", pretrained=True, **kwargs):
-    model = ResNet(
+def resnet34(
+    num_classes,
+    loss="softmax",
+    pretrained=True,
+    input_is_masked=False,
+    **kwargs
+):
+    model = REIDModel(
+        input_is_masked=input_is_masked,
         num_classes=num_classes,
         loss=loss,
         block=BasicBlock,
@@ -444,8 +470,15 @@ def resnet34(num_classes, loss="softmax", pretrained=True, **kwargs):
     return model
 
 
-def resnet50(num_classes, loss="softmax", pretrained=True, **kwargs):
-    model = ResNet(
+def resnet50(
+    num_classes,
+    loss="softmax",
+    pretrained=True,
+    input_is_masked=False,
+    **kwargs
+):
+    model = REIDModel(
+        input_is_masked=input_is_masked,
         num_classes=num_classes,
         loss=loss,
         block=Bottleneck,
@@ -465,8 +498,15 @@ ResNet + FC
 """
 
 
-def resnet50_fc512(num_classes, loss="softmax", pretrained=True, **kwargs):
-    model = ResNet(
+def resnet50_fc512(
+    num_classes,
+    loss="softmax",
+    pretrained=True,
+    input_is_masked=False,
+    **kwargs
+):
+    model = REIDModel(
+        input_is_masked=input_is_masked,
         num_classes=num_classes,
         loss=loss,
         block=Bottleneck,

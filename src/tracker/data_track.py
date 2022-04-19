@@ -10,7 +10,11 @@ from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
 import torch
 from src.utils.file_utils import ensure_dir
-from src.detector.utils import decode_segmentation
+from src.detector.data_utils import (
+    decode_segmentation,
+    load_detection_from_txt,
+    load_segmentation,
+)
 
 _sets = {}
 splits = [
@@ -185,25 +189,11 @@ class MOT16Sequence(Dataset):
 
     def __getitem__(self, idx):
         """Return the ith image converted to blob"""
-        data = self.data[idx]
-
-        img = Image.open(data["im_path"]).convert("RGB")
-
+        frame = self.data[idx]
+        img = Image.open(frame["im_path"]).convert("RGB")
         img = self.transforms(img)
-
-        sample = {}
-        sample["img"] = img
-        sample["img_path"] = data["im_path"]
-        sample["gt"] = data["gt"]
-        sample["vis"] = data["vis"]
-
-        # segmentation
-        if data["seg_img"] is not None:
-            seg_img = np.array(data["seg_img"])
-            seg_img = decode_segmentation(seg_img)
-            sample["seg_img"] = seg_img
-
-        return sample
+        frame.update({"img": img})
+        return frame
 
     def _sequence(self):
         seq_name = self._seq_name
@@ -230,45 +220,47 @@ class MOT16Sequence(Dataset):
         data = []
         boxes = {}
         visibility = {}
-        seg_imgs = {}
 
-        # for i in range(1, seqLength + 1):
-        #     boxes[i] = {}
-        #     visibility[i] = {}
-
-        no_gt = False
+        no_gt = True
         if osp.exists(gt_file):
             gt = load_detection_from_txt(
                 txt_path=gt_file, vis_threshold=self._vis_threshold, mode="gt"
             )
             visibility = gt["visibilities"]
             boxes = gt["boxes"]
-        else:
-            no_gt = True
-
-        if self._return_gt_segmentation:
-            if osp.exists(seg_dir):
-                for seg_file in listdir_nohidden(seg_dir):
-                    frame_id = int(seg_file.split(".")[0])
-                    seg_img = Image.open(osp.join(seg_dir, seg_file))
-                    seg_imgs[frame_id] = seg_img
+            no_gt = False
 
         for img_file in os.listdir(img_dir):
             img_path = osp.join(img_dir, img_file)
-            i = int(img_file.split(".")[0])
+            frame_id = int(img_file.split(".")[0])
+
+            if self._return_gt_segmentation and osp.exists(seg_dir):
+                seg_file = f"{frame_id:06d}.png"
+                seg_path = osp.join(seg_dir, seg_file)
+                seg_img, keep_ids = load_segmentation(
+                    seg_path=seg_path,
+                    box_ids=torch.tensor(list(boxes[frame_id].keys())),
+                )
+                boxes[frame_id] = {
+                    id: box
+                    for (id, box) in boxes[frame_id].items()
+                    if id in keep_ids
+                }
+                visibility[frame_id] = {
+                    id: vis
+                    for (id, vis) in visibility[frame_id].items()
+                    if id in keep_ids
+                }
+            else:
+                seg_img = None
 
             datum = {
-                "gt": boxes[i],
+                "gt": boxes[frame_id],
                 "im_path": img_path,
-                "vis": visibility[i],
+                "vis": visibility[frame_id],
+                "seg_img": seg_img,
             }
-
-            datum["seg_img"] = None
-            if seg_imgs:
-                datum["seg_img"] = seg_imgs[i]
-
             data.append(datum)
-
         return data, no_gt
 
     def __str__(self):
@@ -325,43 +317,4 @@ class MOT16Sequence(Dataset):
                             -1,
                         ]
                     )
-
-
-def load_detection_from_txt(txt_path, vis_threshold=0.0, mode="gt"):
-    """
-    modes: "det", "gt", "track"
-    """
-    boxes = defaultdict(dict)
-    visibility = defaultdict(dict)
-    gt = {}
-    with open(txt_path, "r") as inf:
-        reader = csv.reader(inf, delimiter=",")
-        for row in reader:
-            # class person, certainity 1, visibility >= 0.25
-            if mode == "gt" and not (
-                int(row[6]) == 1
-                and int(row[7]) == 1
-                and float(row[8]) >= vis_threshold
-            ):
-                continue
-            elif mode == "gt":
-                visibility[int(row[0])][int(row[1])] = float(row[8])
-
-            if mode == "det" and False:  # TODO add condition
-                continue
-            if mode == "track" and False:  # TODO add condition
-                continue
-            # Make pixel indexes 0-based, should already be 0-based (or not)
-            x1 = float(row[2]) - 1
-            y1 = float(row[3]) - 1
-            # This -1 accounts for the width (width of 1 x1=x2)
-            x2 = x1 + float(row[4]) - 1
-            y2 = y1 + float(row[5]) - 1
-            bb = torch.tensor([x1, y1, x2, y2], dtype=torch.float32)
-            boxes[int(row[0])][int(row[1])] = bb
-
-    gt["boxes"] = boxes
-    if mode == "gt":
-        gt["visibilities"] = visibility
-    return gt
 

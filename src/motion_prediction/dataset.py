@@ -8,8 +8,9 @@ import torchvision
 from src.tracker.data_track import load_detection_from_txt
 from src.tracker.data_track import split_sequence_names
 from src.motion_prediction.kalman import (
-    ConstAccelerationFilter,
-    ConstVelocityFilter,
+    KalmanFilter,
+    freeze_at_mean,
+    obj_is_moving,
 )
 
 
@@ -22,35 +23,10 @@ def sliding_windows(sequence, history_len=10, future_len=5):
     return hist_crops, fut_crops
 
 
-def freeze_if_not_moving(trajectory, x_distance_tresh=5, y_distance_tresh=5):
-    """
-    The kalman filter does a good job at smoothing moving trajectories,
-    but it has no functionality of classifying a trajectory as completely standing.
-    Instead it tries to smooth the micro movements on a micro level.
-    
-    -> this functionen freezes the trajectory to a single point, if the object does not move
-    """
-    start = trajectory[0, :2]
-    end = trajectory[-1, :2]
-    distance = torch.linalg.norm(start - end)
-    # x_distance = torch.abs(start[0] - end[0])
-    # y_distance = torch.abs(start[1] - end[1])
-    if distance < 5:
-        new_trajectory = trajectory.mean(dim=0).repeat(len(trajectory), 1)
-    else:
-        new_trajectory = trajectory.clone()
-
-    # new_trajectory = trajectory.clone()
-    # if x_distance < x_distance_tresh:
-    #     new_trajectory[:, 0] = new_trajectory[:, 0].mean()
-
-    # if y_distance < y_distance_tresh:
-    #     new_trajectory[:, 1] = new_trajectory[:, 1].mean()
-    return new_trajectory
-
-
 class MOT16MotionPrediction(torch.utils.data.Dataset):
-    def __init__(self, root, split, future_len=20, history_len=20):
+    def __init__(
+        self, root, split, use_filter=True, future_len=20, history_len=20
+    ):
         super().__init__()
         self._hist_trajs = []
         self._fut_trajs = []
@@ -59,8 +35,8 @@ class MOT16MotionPrediction(torch.utils.data.Dataset):
         self._train_folders = os.listdir(os.path.join(root, "train"))
         self._test_folders = os.listdir(os.path.join(root, "test"))
 
-        kalman = ConstVelocityFilter(
-            process_variance=1, measurement_variance=1, dt=1 / 30
+        kalman = KalmanFilter(
+            process_variance=500, measurement_variance=0.001, dt=1 / 30
         )
 
         seq_names = split_sequence_names(split, root)
@@ -91,7 +67,7 @@ class MOT16MotionPrediction(torch.utils.data.Dataset):
                 self._fut_trajs.extend(fut)
 
                 kalman_traj = full_traj.clone()
-                kalman_traj[:, :2] = kalman.smooth(full_traj[:, :2])
+                kalman_traj = kalman.smooth(full_traj)
                 kalman.reset_state()
                 hist_filt, fut_filt = sliding_windows(
                     kalman_traj, future_len=future_len, history_len=history_len
@@ -99,12 +75,14 @@ class MOT16MotionPrediction(torch.utils.data.Dataset):
                 self._hist_trajs_processed.extend(hist_filt)
                 self._fut_trajs_processed.extend(fut_filt)
 
-        self._hist_trajs_processed = list(
-            map(freeze_if_not_moving, self._hist_trajs_processed)
-        )
-        self._fut_trajs_processed = list(
-            map(freeze_if_not_moving, self._fut_trajs_processed)
-        )
+        self._hist_trajs_processed = [
+            freeze_at_mean(traj) if not obj_is_moving(traj) else traj
+            for traj in self._hist_trajs_processed
+        ]
+        self._fut_trajs_processed = [
+            freeze_at_mean(traj) if not obj_is_moving(traj) else traj
+            for traj in self._fut_trajs_processed
+        ]
 
     def __len__(self):
         return len(self._hist_trajs)
