@@ -1,12 +1,12 @@
 # **DOLOTraPed**: **D**on't **O**nly **L**ook **O**nce when **Tra**cking **Ped**estrians
 This repository contains the Multi-Object-Tracking Model of *Arthur Zakirov* (Technical University of Munich) for the *MOT16* Challenge.
 
-<img src="test.gif" width="500"/>
+<img src="img/test.gif" width="500"/>
 
 ## **The Method explained**
 *DOLOTraPed* uses [MaskRCNN](https://arxiv.org/abs/1703.06870) as an object detector. The data association is based on [DeepSORT](https://arxiv.org/abs/1703.07402). The major contribution of this work are these 4 modules,
 that can be added to any state of the art Multi-Object-Tracker to potentially improve the performance.<br>
-<img src="TrackerOverview.png" width="500"/>
+<img src="img/TrackerOverview.png" width="500"/>
 
 
 #### **opNMS**: **o**cclusion **p**reserving **N**on **M**aximum **S**upression<br>
@@ -23,7 +23,7 @@ This is a huge challenge for most object detectors, since they focus on the visi
 Maximizing the recall of a Multi-Object-Tracker always comes at a risk of reducing the precision. 
 State of the art MOT algorithms mainly rely on the detector score, to determine wether to consider a detection.
 *daTRAFIM* is an alternative disrimination, that uses domain knowledge to test low score detections for their potential to be a pedestrian. It also checks already tracked object hypotheses for certain criteria and conditionally drops them, to prevent false positives.
-<img src="MatchingSystempng.png" width="500"/>
+<img src="img/MatchingSystempng.png" width="500"/>
 
 #### **attReID**: **att**entive **Re**-**ID**entification
 State of the art Multi-Object-Trackers use appearance based features for matching between frames in the data association step.
