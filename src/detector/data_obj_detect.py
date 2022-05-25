@@ -14,7 +14,8 @@ import torchvision
 import torchvision.transforms.functional as TF
 import pandas as pd
 
-from src.detector.utils import decode_segmentation, mask_convert
+from src.detector.utils import mask_convert
+from src.detector.data_utils import decode_segmentation
 from src.tracker.data_track import split_sequence_names
 from src.utils.file_utils import listdir_nohidden
 from src.tracker.data_track import load_detection_from_txt
@@ -260,6 +261,51 @@ class MOT16ObjDetect(torch.utils.data.Dataset):
                 for d in v:
                     writer.writerow(d)
 
+    def compare_detectors(self, results1, results2, ovthresh=0.5):
+        all_sequences_compare_results = defaultdict(dict)
+        for (seq_name, seq_results1), (_, seq_results2) in zip(
+            results1.items(), results2.items()
+        ):
+            npos = 0
+            for frame_id, (frame_result1, frame_result2) in enumerate(
+                zip(seq_results1, seq_results2), start=1
+            ):
+                im_index = self._convert_frame_to_img_idx[seq_name][frame_id]
+                annotation = self._get_annotation(im_index)
+
+                visible = annotation["visibilities"] > self._vis_threshold
+                npos += len(visible)
+                im_gt = annotation["boxes"][visible].cpu().numpy()
+                im_det1 = frame_result1["boxes"].cpu().numpy()
+                im_det2 = frame_result2["boxes"].cpu().numpy()
+                
+                found1, im_tp1, im_fp1 = tp_and_fp_of_detection(
+                    im_gt=im_gt, im_det=im_det1, ovthresh=ovthresh
+                )
+
+                found2, im_tp2, im_fp2 = tp_and_fp_of_detection(
+                    im_gt=im_gt, im_det=im_det2, ovthresh=ovthresh
+                )
+                tp_exclusive_1 = np.where(
+                    np.logical_and(
+                        found1.astype("bool"), ~found2.astype("bool")
+                    )
+                )[0]
+                tp_exclusive_2 = np.where(
+                    np.logical_and(
+                        found2.astype("bool"), ~found1.astype("bool")
+                    )
+                )[0]
+
+                if tp_exclusive_1.any() or tp_exclusive_2.any():
+                    frame_compare_dict = defaultdict(dict)
+                    frame_compare_dict["TP"]["exclusive_1"] = tp_exclusive_1
+                    frame_compare_dict["TP"]["exclusive_2"] = tp_exclusive_2
+                    all_sequences_compare_results[seq_name][
+                        frame_id
+                    ] = frame_compare_dict
+        return all_sequences_compare_results
+
     def evaluate_detections_on_tracking_data(self, results, ovthresh=0.5):
         """
         results[seq_name] = list(frame["boxes"])
@@ -409,11 +455,11 @@ def detection_metrics_from_tp_and_fp(tp, fp, npos):
     ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
 
     detector_eval_dict = {
-        "AP": ap.item(),
-        "Prec": prec[-1].item(),
-        "Rec": np.max(rec).item(),
-        "TP": np.max(tp).item(),
-        "FP": np.max(fp).item(),
+        "AP": f"{ap.item():.2f}",
+        "Prec": f"{prec[-1].item():.2f}",
+        "Rec": f"{np.max(rec).item():.2f}",
+        "TP": str(int(np.max(tp).item())),
+        "FP": str(int(np.max(fp).item())),
     }
     return detector_eval_dict
 

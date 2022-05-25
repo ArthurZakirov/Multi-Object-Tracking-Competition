@@ -6,6 +6,8 @@ from collections import defaultdict
 import random
 import warnings
 
+from src.detector.visualize import visualize_detection
+
 warnings.filterwarnings("ignore")
 from tqdm import tqdm, trange
 import numpy as np
@@ -16,8 +18,8 @@ from src.detector.object_detector import init_detector
 from src.utils.file_utils import ensure_dir
 from src.tracker.data_track import MOT16Sequences
 from src.detector.data_obj_detect import MOT16ObjDetect
+from src.detector.data_utils import encode_segmentation
 from src.detector.utils import (
-    encode_segmentation,
     mask_convert,
     obj_detect_transforms,
     run_obj_detect,
@@ -33,7 +35,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "--obj_detect_path",
     type=str,
-    default="models/obj_detect/default_maskrcnn.pth",
+    default="config/obj_detect/coco_maskrcnn_recall.json",
 )
 parser.add_argument("--tracker_or_detector_data", type=str, default="tracker")
 parser.add_argument("--data_root_dir", type=str, default="data/MOT16")
@@ -43,7 +45,8 @@ parser.add_argument(
 parser.add_argument("--output_eval_dir", type=str, default="results/detector")
 parser.add_argument("--split", type=str, default="mini")
 parser.add_argument("--sparse_version", action="store_true")
-parser.add_argument("--vis_threshold", type=float, default=0.25)
+parser.add_argument("--vis_threshold", type=float, default=0.0)
+parser.add_argument("--ovthresh", type=float, default=0.5)
 parser.add_argument("--batch_size", type=int, default=2)
 parser.add_argument("--num_workers", type=int, default=0)
 parser.add_argument("--debug", action="store_true")
@@ -53,11 +56,13 @@ args = parser.parse_args()
 def main():
     dataset_name = f"MOT16-{args.split}"
     detector_name = os.path.basename(args.obj_detect_path).split(".")[0]
-    # detector_name += "_nms" + str(int(100 * args.nms_thresh))
     file_name = detector_name + "_" + dataset_name
 
+    if ".json" in args.obj_detect_path:
+        obj_detect = init_detector(**json.load(open(args.obj_detect_path, "r")))
+    else:
+        obj_detect = torch.load(args.obj_detect_path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    obj_detect = torch.load(args.obj_detect_path)
     obj_detect.to(device)
 
     dataset_test = MOT16ObjDetect(
@@ -118,28 +123,24 @@ def main():
                 with torch.no_grad():
                     detection = obj_detect([image.to(device)])[0]
 
-                pedestrian = detection["labels"] == 1
-
                 detection_dict[str(sequence)].append(
                     {
-                        "boxes": detection["boxes"][pedestrian].cpu(),
-                        "scores": detection["scores"][pedestrian].cpu(),
+                        "boxes": detection["boxes"].cpu(),
+                        "scores": detection["scores"].cpu(),
                     }
                 )
                 if "masks" in detection.keys():
-                    binary_masks = (
-                        detection["masks"][pedestrian].squeeze(1).int().cpu()
-                    )
-                    binary_masks = (binary_masks > 0.5).int()
+                    binary_masks = detection["masks"].squeeze(1).int().cpu()
                     scalar_mask = mask_convert(binary_masks, "binary", "scalar")
                     encoded_mask = encode_segmentation(scalar_mask)
                     pil_mask = torchvision.transforms.ToPILImage()(encoded_mask)
                     segmentation_dict[str(sequence)].append(pil_mask)
 
                     assert not (binary_masks.sum((1, 2)) == 0).any()
-                    assert len(torch.unique(scalar_mask)) - 1 == len(
+                    if not len(torch.unique(scalar_mask)) - 1 == len(
                         detection_dict[str(sequence)][-1]["boxes"]
-                    )
+                    ):
+                        print(frame_id)
 
                 if args.debug and frame_id == 2:
                     break
@@ -147,7 +148,7 @@ def main():
 
         print("\nevaluate detections...")
         eval_df = dataset_test.evaluate_detections_on_tracking_data(
-            detection_dict
+            detection_dict, ovthresh=args.ovthresh
         )
         print("Done!")
 

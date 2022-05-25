@@ -25,9 +25,10 @@ def sliding_windows(sequence, history_len=10, future_len=5):
 
 class MOT16MotionPrediction(torch.utils.data.Dataset):
     def __init__(
-        self, root, split, use_filter=True, future_len=20, history_len=20
+        self, root, split, processed=False, future_len=20, history_len=20
     ):
         super().__init__()
+        self.processed = processed
         self._hist_trajs = []
         self._fut_trajs = []
         self._hist_trajs_processed = []
@@ -57,9 +58,9 @@ class MOT16MotionPrediction(torch.utils.data.Dataset):
 
             for obj_id, obj_boxes in boxes_xyxy.items():
                 full_traj = torch.stack(obj_boxes, dim=0)
-                full_traj = torchvision.ops.box_convert(
-                    full_traj, "xyxy", "cxcywh"
-                )
+                # full_traj = torchvision.ops.box_convert(
+                #     full_traj, "xyxy", "cxcywh"
+                # )
                 hist, fut = sliding_windows(
                     full_traj, future_len=future_len, history_len=history_len
                 )
@@ -87,8 +88,8 @@ class MOT16MotionPrediction(torch.utils.data.Dataset):
     def __len__(self):
         return len(self._hist_trajs)
 
-    def __getitem__(self, idx, processed=True):
-        if processed:
+    def __getitem__(self, idx):
+        if self.processed:
             x = self._hist_trajs_processed[idx]
             y = self._fut_trajs_processed[idx]
         else:

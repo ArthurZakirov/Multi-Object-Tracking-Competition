@@ -18,6 +18,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--original_data_root_dir",
@@ -28,7 +29,7 @@ parser.add_argument(
 parser.add_argument(
     "--precomputed_data_root_dir",
     type=str,
-    default="data/precomputed_detection/default_maskrcnn",
+    default="data/precomputed_detection/coco_maskrcnn_recall",
     help="path to precomputed evaluation data root",
 )
 parser.add_argument(
@@ -52,7 +53,7 @@ parser.add_argument(
 parser.add_argument(
     "--tracker_config_path",
     type=str,
-    default="config/tracker/tracker_reid.json",
+    default="config/tracker/tracker.json",
     help="path to tracker configuration",
 )
 
@@ -83,7 +84,16 @@ def main():
         json.dump(vars(args), f)
 
     # execute
-    tracker = MyTracker.from_config(tracker_hyperparams)
+    from src.tracker.pedestrian_tracker import (
+        Tracker,
+        KalmanTracker,
+        PatientTracker,
+        ByteTracker,
+        DistractorAwareTracker,
+    )
+
+    tracker = DistractorAwareTracker.from_config(tracker_hyperparams)
+    # tracker = MyTracker.from_config(tracker_hyperparams)
 
     if args.use_precomputed:
         sequences = MOT16SequencesPrecomputed(
@@ -126,14 +136,16 @@ def main():
 
     print("\nsave_evaluation...")
     output_evaluation_path = os.path.join(
-        args.output_dir, time, "tracker_evaluation_{dataset}.csv"
+        args.output_dir, time, f"tracker_evaluation_{dataset}.csv"
     )
     ensure_dir(output_evaluation_path)
     if not eval_df is None:
+        eval_df = eval_df.applymap(
+            lambda x: x if isinstance(x, str) else f"{x:.2f}"
+        )
         eval_df.to_csv(output_evaluation_path)
 
     print("\nsave_tracker_predictions...")
-
     for sequence_name, tracker_results_dict in results_seq.items():
         output_pred_path = os.path.join(
             args.output_dir, time, sequence_name, "track.txt"

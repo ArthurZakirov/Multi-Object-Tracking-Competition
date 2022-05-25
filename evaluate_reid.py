@@ -19,6 +19,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--reid_model_dir",
@@ -36,7 +37,7 @@ parser.add_argument(
 parser.add_argument(
     "--precomputed_data_root_dir",
     type=str,
-    default="data/precomputed_detection/default_maskrcnn",
+    default="data/precomputed_detection/coco_maskrcnn_recall",
     help="path to precomputed evaluation data root",
 )
 parser.add_argument(
@@ -63,9 +64,12 @@ def main():
     reid_model_name = os.path.basename(args.reid_model_dir)
 
     # TODO : this is a temporary fix, because input_is_masked is not included as an attribute in
-    reid_model.input_is_masked = json.load(
-        open(os.path.join(args.reid_model_dir, "model_config.json"), "r")
-    )["input_is_masked"]
+    # reid_model.input_is_masked = json.load(
+    #     open(os.path.join(args.reid_model_dir, "model_config.json"), "r")
+    # )["input_is_masked"]
+
+    reid_model_name = "masked_reid"
+    reid_model.input_is_masked = True
 
     # execute
     sequences = MOT16SequencesPrecomputed(
@@ -103,9 +107,14 @@ def main():
             torch.save(det_features, output_reid_on_det_path)
 
             _, (targets,) = convert_frames([frame], "tracker", "detector")
-            gt_features = tracker._get_reid_features(
-                frame, boxes=targets["boxes"], masks=targets["seg_img"]
-            )
+            if reid_model.input_is_masked:
+                gt_features = tracker._get_reid_features(
+                    frame, boxes=targets["boxes"], masks=targets["seg_img"]
+                )
+            else:
+                gt_features = tracker._get_reid_features(
+                    frame, boxes=targets["boxes"]
+                )
             output_reid_on_gt_path = os.path.join(
                 args.precomputed_data_root_dir,
                 str(sequence),

@@ -40,9 +40,12 @@ def visualize_frame_fp(
     fp_ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
 
     if show_segmentation:
-        masks = sequence[frame_id]["masks"]
-        colour_map = colour_map_of_binary_masks(masks)
-        fp_ax.imshow(colour_map)
+        try:
+            masks = sequence[frame_id]["masks"]
+            colour_map = colour_map_of_binary_masks(masks)
+            fp_ax.imshow(colour_map)
+        except:
+            pass
     return fig
 
 
@@ -300,6 +303,7 @@ def visualize_lost_tracks(
     tracker,
     show_idx=0,
     show_boxes=["track", "fut", "pred"],
+    future_horizon=3,
     zoom=True,
     figsize=(15, 15),
 ):
@@ -352,11 +356,21 @@ def visualize_lost_tracks(
         [sequence[frame_id]["gt"][oid] for frame_id in miss_df["FrameId"]]
     )
 
-    det_hist_traj = tracker.short_motion_predictor.kalman.smooth(det_hist_traj)
-    tracker.short_motion_predictor.kalman.reset_state()
-    pred_traj = tracker.short_motion_predictor(
-        [det_hist_traj], future_lens=[len(fut_traj)]
-    )[0]
+    from src.motion_prediction.kalman import SORTKalmanFilter
+
+    kalman = SORTKalmanFilter()
+    smooth_det_hist_traj = []
+    for box in det_hist_traj:
+        kalman.update(box)
+        pred = kalman.predict().squeeze()
+        smooth_det_hist_traj.append(pred)
+    det_hist_traj = torch.stack(smooth_det_hist_traj, dim=0)
+
+    pred_traj = []
+    for _ in range(len(fut_traj)):
+        pred = kalman.predict().squeeze()
+        pred_traj.append(pred)
+    pred_traj = torch.stack(pred_traj, dim=0)
 
     gt_hist_plot_traj = torch.stack(
         [0.5 * (gt_hist_traj[:, 0] + gt_hist_traj[:, 2]), gt_hist_traj[:, 3]],

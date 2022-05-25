@@ -38,7 +38,6 @@ parser.add_argument(
     type=str,
     default="config/obj_detect/fasterrcnn.json",
 )
-parser.add_argument("--tracker_or_detector_data", type=str, default="tracker")
 parser.add_argument("--data_root_dir", type=str, default="data/MOT16")
 parser.add_argument("--output_root_dir", type=str, default="models/obj_detect")
 parser.add_argument("--train_split", type=str, default="train_wo_val2")

@@ -1,6 +1,124 @@
 import cv2
 import numpy as np
+import torchvision
 import torch
+
+
+def convert_box_to_state(boxes):
+    cx, cy, w, h = torchvision.ops.box_convert(boxes, "xyxy", "cxcywh").T
+    ratios = w / h
+    areas = torchvision.ops.box_area(boxes)
+    states = torch.stack([cx, cy, areas, ratios], dim=1)
+    return states.numpy()
+
+
+def convert_state_to_box(states):
+    cx, cy, areas, ratios = states.T
+    w = np.sqrt(areas * ratios)
+    h = areas / w
+    boxes = np.stack(
+        [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0], axis=1
+    )
+    return torch.from_numpy(boxes)
+
+
+class SORTKalmanFilter:
+    """
+
+    state vector
+    -----------------
+    u - x-center pos
+    v - y-center pos
+    s - scale (area)
+    r - ratio
+
+    u' - x-center velocity
+    v' - y-center velocity
+    s' - area change over time
+
+    """
+
+    def __init__(self):
+        self.initial_state = None
+        self.H = np.array(
+            [
+                [1, 0, 0, 0, 0, 0, 0],
+                [0, 1, 0, 0, 0, 0, 0],
+                [0, 0, 1, 0, 0, 0, 0],
+                [0, 0, 0, 1, 0, 0, 0],
+            ],
+            dtype=np.float32,
+        )
+
+        self.A = np.array(
+            [
+                [1, 0, 0, 0, 1, 0, 0],
+                [0, 1, 0, 0, 0, 1, 0],
+                [0, 0, 1, 0, 0, 0, 1],
+                [0, 0, 0, 1, 0, 0, 0],
+                [0, 0, 0, 0, 1, 0, 0],
+                [0, 0, 0, 0, 0, 1, 0],
+                [0, 0, 0, 0, 0, 0, 1],
+            ],
+            dtype=np.float32,
+        )
+
+        self.Q = np.array(
+            [
+                [1, 0, 0, 0, 0, 0, 0],
+                [0, 1, 0, 0, 0, 0, 0],
+                [0, 0, 1, 0, 0, 0, 0],
+                [0, 0, 0, 1, 0, 0, 0],
+                [0, 0, 0, 0, 0.01, 0, 0],
+                [0, 0, 0, 0, 0, 0.01, 0],
+                [0, 0, 0, 0, 0, 0, 0.01 ** 2],
+            ],
+            dtype=np.float32,
+        )
+
+        self.P = np.array(
+            [
+                [1, 0, 0, 0, 1, 0, 0],
+                [0, 1, 0, 0, 0, 1, 0],
+                [0, 0, 1, 0, 0, 0, 1],
+                [0, 0, 0, 1, 0, 0, 0],
+                [0, 0, 0, 0, 1000, 0, 0],
+                [0, 0, 0, 0, 0, 1000, 0],
+                [0, 0, 0, 0, 0, 0, 1000],
+            ],
+            dtype=np.float32,
+        )
+
+        self.R = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 10, 0], [0, 0, 0, 10],],
+            dtype=np.float32,
+        )
+        self.reset()
+
+    def reset(self):
+        kalman = cv2.KalmanFilter(7, 4)
+        kalman.transitionMatrix = self.A.copy()
+        kalman.measurementMatrix = self.H.copy()
+        kalman.processNoiseCov = self.Q.copy()
+        kalman.errorCovPre = self.P.copy()
+        # kalman.errorCovPost = self.P.copy()
+        kalman.measurementNoiseCov = self.R.copy()
+        self.kalman = kalman
+        self.initial_state = None
+
+    def predict(self):
+        relative_pred_state = self.kalman.predict()[:4].squeeze()
+        pred_state = self.initial_state + relative_pred_state
+        pred_box = convert_state_to_box(pred_state[np.newaxis]).squeeze()
+        return pred_box
+
+    def update(self, box):
+        state = convert_box_to_state(box.unsqueeze(0)).squeeze()
+        if self.initial_state is None:
+            self.initial_state = state
+            self.kalman.predict()
+        else:
+            self.kalman.correct(state.squeeze() - self.initial_state.squeeze())
 
 
 class KalmanFilter:

@@ -17,7 +17,7 @@ import src.market.metrics as metrics
 from src.utils.torch_utils import run_model_on_list
 from src.tracker.utils import prepare_crops_for_reid
 import torchvision
-from src.motion_prediction.kalman import obj_is_moving
+from src.motion_prediction.kalman import SORTKalmanFilter, obj_is_moving
 
 _UNMATCHED_COST = 255
 
@@ -193,8 +193,8 @@ class MyTracker:
         long_motion_predictor=None,
         distance_threshold=0.5,
         unmatched_cost=255,
-        patience=5,
-        long_inactive_thresh=5,
+        patience=0,
+        long_inactive_thresh=0,
         not_moving_thresh=0,
         add_only_previously_hidden_objects=False,
         use_byte=False,
@@ -342,7 +342,7 @@ class MyTracker:
         )
         return boxes, scores, masks
 
-    def _get_reid_features(self, frame, boxes, masks):
+    def _get_reid_features(self, frame, boxes, masks=None):
         # take reid features from databasis if available
         if "reid" in frame.keys():
             pred_features = frame["reid"].cpu()
@@ -461,30 +461,31 @@ class MyTracker:
             t.add_feature(pred_features[box_idx])
 
         # set matched tracks to "active"
-        for track_idx in matched_track_idx:
-            t = tracks[track_idx]
-            t.inactive = 0
+        # for track_idx in matched_track_idx:
+        #     t = tracks[track_idx]
+        #     t.inactive = 0
 
-        # set unmatched tracks to "inactive"
-        for track_idx in unmatched_track_idx:
-            t = tracks[track_idx]
-            t.inactive += 1
+        # # set unmatched tracks to "inactive"
+        # for track_idx in unmatched_track_idx:
+        #     t = tracks[track_idx]
+        #     t.inactive += 1
 
         # increase standing count, mark long standing tracks as distractors, they will not be submitted to results
-        for track_idx in matched_track_idx:
-            t = tracks[track_idx]
-            if not obj_is_moving(t.get_trajectory()):
-                t.not_moving += 1
-            else:
-                t.not_moving = 0
+        # for track_idx in matched_track_idx:
+        #     t = tracks[track_idx]
+        #     if not obj_is_moving(t.get_trajectory()):
+        #         t.not_moving += 1
+        #     else:
+        #         t.not_moving = 0
 
         # increase inactive count, and remove long inactive tracks
         remove_track_ids = []
         for track_idx in unmatched_track_idx:
             t = tracks[track_idx]
-            t.inactive += 1
-            if t.inactive > self.patience:
-                remove_track_ids.append(t.id)
+            # t.inactive += 1
+            # if t.inactive > self.patience:
+            #     remove_track_ids.append(t.id)
+            remove_track_ids.append(t.id)
         tracks = [t for t in tracks if not t.id in remove_track_ids]
 
         # add new
@@ -493,11 +494,11 @@ class MyTracker:
         new_features = []
         new_masks = []
         for idx in unmatched_box_idx:
-            if self.add_only_previously_hidden_objects and not obj_is_occluded(
-                obj_box=boxes[idx],
-                other_boxes=torch.stack(s.track_boxes("active"), dim=0),
-            ):
-                continue
+            # if self.add_only_previously_hidden_objects and not obj_is_occluded(
+            #     obj_box=boxes[idx],
+            #     other_boxes=torch.stack(s.track_boxes("active"), dim=0),
+            # ):
+            #     continue
             new_boxes.append(boxes[idx])
             new_scores.append(scores[idx])
             new_features.append(pred_features[idx])
@@ -764,13 +765,20 @@ def hungarian_matching(distance_matrix, unmatched_cost, distance_threshold):
     )
 
 
+def obj_close_to_img_edge(
+    obj_box, image_height=1080, image_width=1920, img_edge_treshold=10,
+):
+    close_to_img_edge = (
+        obj_box[0] < img_edge_treshold
+        or obj_box[2] > image_width - img_edge_treshold
+        or obj_box[1] < img_edge_treshold
+        or obj_box[3] > image_height - img_edge_treshold
+    )
+    return close_to_img_edge
+
+
 def obj_is_occluded(
-    obj_box,
-    other_boxes,
-    image_height=1080,
-    image_width=1920,
-    img_edge_treshold=10,
-    iou_treshold=0.0,
+    obj_box, other_boxes, iou_treshold=0.0,
 ):
     _, _, _, y_max_obj = obj_box
     _, _, _, y_max_other = other_boxes.permute(1, 0)
@@ -778,14 +786,5 @@ def obj_is_occluded(
     occluded_by_other_objects = torch.logical_and(
         iou > iou_treshold, y_max_obj < y_max_other
     ).any()
-    close_to_img_edge = (
-        obj_box[0] < img_edge_treshold
-        or obj_box[2] > image_width - img_edge_treshold
-        or obj_box[1] < img_edge_treshold
-        or obj_box[3] > image_height - img_edge_treshold
-    )
-    if occluded_by_other_objects or close_to_img_edge:
-        return True
-    else:
-        return False
+    return occluded_by_other_objects
 

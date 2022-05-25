@@ -17,6 +17,7 @@ from src.tracker.utils import load_distance_fn
 from src.utils.file_utils import ensure_dir
 from src.utils.train_utils import log_to_tensorboard
 
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--reid_model_config_path",

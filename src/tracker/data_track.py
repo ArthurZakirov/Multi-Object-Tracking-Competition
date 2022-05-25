@@ -233,6 +233,11 @@ class MOT16Sequence(Dataset):
         for img_file in os.listdir(img_dir):
             img_path = osp.join(img_dir, img_file)
             frame_id = int(img_file.split(".")[0])
+            datum = {
+                "gt": boxes[frame_id],
+                "im_path": img_path,
+                "vis": visibility[frame_id],
+            }
 
             if self._return_gt_segmentation and osp.exists(seg_dir):
                 seg_file = f"{frame_id:06d}.png"
@@ -241,25 +246,20 @@ class MOT16Sequence(Dataset):
                     seg_path=seg_path,
                     box_ids=torch.tensor(list(boxes[frame_id].keys())),
                 )
-                boxes[frame_id] = {
-                    id: box
-                    for (id, box) in boxes[frame_id].items()
-                    if id in keep_ids
-                }
-                visibility[frame_id] = {
-                    id: vis
-                    for (id, vis) in visibility[frame_id].items()
-                    if id in keep_ids
-                }
-            else:
-                seg_img = None
 
-            datum = {
-                "gt": boxes[frame_id],
-                "im_path": img_path,
-                "vis": visibility[frame_id],
-                "seg_img": seg_img,
-            }
+                datum["gt"] = {
+                    id: box
+                    for (id, box) in datum["gt"].items()
+                    if id in keep_ids
+                }
+                datum["vis"] = {
+                    id: vis
+                    for (id, vis) in datum["vis"].items()
+                    if id in keep_ids
+                }
+
+                datum.update({"seg_img": seg_img})
+
             data.append(datum)
         return data, no_gt
 

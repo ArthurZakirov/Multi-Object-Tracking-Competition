@@ -84,6 +84,16 @@ class MOT16SequencesPrecomputed(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self._sequences[idx]
 
+    def get_detection_results_dict(self):
+        from collections import defaultdict
+
+        results = defaultdict(list)
+        for sequence in self._sequences:
+            for frame_id in range(len(sequence)):
+                frame_result = sequence._sequence_detection[frame_id]
+                results[str(sequence)].append(frame_result)
+        return results
+
 
 class MOT16SequencePrecomputed(MOT16Sequence):
     def __init__(

@@ -55,17 +55,18 @@ def decode_segmentation(seg_img):
 def load_segmentation(seg_path, box_ids=None, only_obj_w_mask=True):
     encoded_masks = TF.to_tensor(Image.open(seg_path))
     masks = decode_segmentation(encoded_masks)
-    seg_ids = torch.unique(masks)[1:]
+    seg_ids = torch.unique(masks)[1:].tolist()
 
     if not box_ids is None:
-        keep_ids = torch.tensor(list(set(box_ids) & set(seg_ids)))
+        if not isinstance(box_ids, list):
+            box_ids = box_ids.tolist()
+        keep_ids = list(set(box_ids) & set(seg_ids))
         remove_seg_ids = torch.tensor(list(set(seg_ids) - set(keep_ids)))
         masks[torch.isin(masks, remove_seg_ids)] = 0
     else:
         keep_ids = seg_ids
 
     binary_masks = mask_convert(masks, "scalar", "binary")
-
     if only_obj_w_mask or box_ids is None:
         return_masks = binary_masks
     else:
