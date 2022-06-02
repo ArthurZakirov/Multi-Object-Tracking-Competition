@@ -1,4 +1,6 @@
 **.csv
+**/.vscode
+**/__pycache__
 **/data/
 **/models/
 **/config/
